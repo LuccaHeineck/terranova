@@ -1,0 +1,8 @@
+TCC1LuccaHeineck.pdf
+
+.venv/
+__pycache__/
+*.pyc
+backend/poc_grid_result.png
+
+.claude/scheduled_tasks.lock
