@@ -12,6 +12,12 @@ Build slowly, validate every part before moving to the next. Start with the simu
 
 To run it: `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 
+**Note (out of order):** at the user's explicit request, a minimal FastAPI skeleton
+(`backend/api/main.py`, a single `GET /health` route) was added ahead of schedule — normally step 5.
+This is skeleton only, not real step 5 work: no config loading, no wiring to `simulation/`, no
+WebSocket streaming yet. Steps 2–4 (Manning roughness, real DEM ingestion, real land-cover data) are
+still the actual next work before `api/` does anything beyond the health check.
+
 ## Structure so far
 
 The full target folder structure (including the folders scaffolded ahead of need, each with a README
