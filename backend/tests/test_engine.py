@@ -1,0 +1,101 @@
+import numpy as np
+import pytest
+
+from simulation.engine import step
+
+
+def test_mass_conservation_and_nonnegative_depth():
+    """Regression of the ad hoc checks from examples/poc_grid.py: over many
+    steps, in a closed system, total volume must stay exactly constant and
+    depth must never go negative."""
+    rows, cols = 20, 20
+    y, x = np.mgrid[0:rows, 0:cols].astype(float)
+    Z = ((x - cols / 2) ** 2 + (y - rows / 2) ** 2) / (rows * cols)
+    N = np.full((rows, cols), 0.05)
+    H = np.zeros((rows, cols))
+    H[rows // 2 - 1: rows // 2 + 2, cols // 2 - 1: cols // 2 + 2] = 5.0
+    initial_volume = H.sum()
+
+    for t in range(50):
+        H = step(Z, H, N)
+        assert H.min() >= -1e-9, f"negative depth at step {t}: {H.min()}"
+        assert abs(H.sum() - initial_volume) < 1e-6, (
+            f"volume drifted at step {t}: {H.sum()} vs {initial_volume}"
+        )
+
+
+def test_step_rejects_nonpositive_roughness():
+    rows, cols = 5, 5
+    Z = np.zeros((rows, cols))
+    H = np.zeros((rows, cols))
+    H[2, 2] = 1.0
+    N = np.full((rows, cols), 0.05)
+    N[3, 3] = 0.0
+
+    with pytest.raises(ValueError):
+        step(Z, H, N)
+
+
+def test_step_rejects_invalid_outflow_fraction():
+    rows, cols = 3, 3
+    Z = np.zeros((rows, cols))
+    H = np.zeros((rows, cols))
+    N = np.full((rows, cols), 0.05)
+
+    with pytest.raises(ValueError):
+        step(Z, H, N, outflow_fraction=0.0)
+    with pytest.raises(ValueError):
+        step(Z, H, N, outflow_fraction=1.5)
+
+
+def test_manning_roughness_steers_flow_toward_smoother_neighbor():
+    """Two downhill neighbors at equal slope and distance (both orthogonal,
+    same elevation drop) but different roughness: more volume should flow
+    toward the smoother (lower-N) one."""
+    rows, cols = 3, 3
+    Z = np.full((rows, cols), 10.0)
+    Z[0, 1] = 0.0  # north neighbor: downhill
+    Z[1, 2] = 0.0  # east neighbor: equally downhill (same drop, same distance)
+
+    N = np.full((rows, cols), 0.05)
+    N[0, 1] = 0.02  # smoother north neighbor
+    N[1, 2] = 0.08  # rougher east neighbor
+
+    H = np.zeros((rows, cols))
+    H[1, 1] = 10.0
+
+    H_after = step(Z, H, N, outflow_fraction=0.1)
+
+    assert H_after[0, 1] > H_after[1, 2], (
+        "more water should flow toward the smoother (lower-N) neighbor"
+    )
+
+
+def test_no_checkerboard_artifact_with_varying_roughness():
+    """Regression for the checkerboard/speckle instability fixed this
+    session: confirms a spatially-varying N (a new multiplicative term in
+    the weights) doesn't reintroduce it. Uses the same neighbor-roughness
+    metric used to diagnose the original bug."""
+    rows, cols = 40, 40
+    y, x = np.mgrid[0:rows, 0:cols].astype(float)
+    cy, cx = rows / 2, cols / 2
+    Z = ((x - cx) ** 2 + (y - cy) ** 2) / (rows * cols) * 3.0
+    diagonal = (x - y) / max(rows, cols)
+    N = 0.09 - 0.07 * np.exp(-(diagonal ** 2) / (2 * 0.15 ** 2))
+
+    H = np.zeros((rows, cols))
+    cy_i, cx_i = rows // 2, cols // 2
+    H[cy_i - 2: cy_i + 3, cx_i - 2: cx_i + 3] = 400.0 / 25
+
+    for _ in range(60):
+        H = step(Z, H, N)
+
+    padded = np.pad(H, 1, mode="edge")
+    neighbor_mean = sum(
+        padded[1 + dr: 1 + dr + rows, 1 + dc: 1 + dc + cols]
+        for dr in (-1, 0, 1) for dc in (-1, 0, 1) if not (dr == 0 and dc == 0)
+    ) / 8.0
+    flooded = H > 1e-6
+    roughness = np.abs(H[flooded] - neighbor_mean[flooded]).mean()
+
+    assert roughness < 0.05, f"speckle artifact detected: roughness={roughness:.5f}"
