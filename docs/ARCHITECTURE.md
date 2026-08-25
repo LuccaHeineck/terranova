@@ -60,8 +60,8 @@ terranova/
 
 ### `backend/simulation/` — the domain layer
 
-What belongs here: the CA transition rule itself — pure functions over NumPy arrays (`Z`, `H`, later `N`
-for roughness). Currently just `engine.py`, exposing `step(Z, H, outflow_fraction=0.5)`.
+What belongs here: the CA transition rule itself — pure functions over NumPy arrays (`Z`, `H`, `N` for
+roughness). Currently just `engine.py`, exposing `step(Z, H, N, outflow_fraction=0.5)`.
 
 What does NOT belong here: file I/O, geodata parsing, HTTP/WebSocket code, configuration loading,
 plotting. `simulation/` must stay dependency-free — no imports from `ingestion/`, `api/`, or `config/` —
@@ -143,10 +143,13 @@ other code (that'd belong in a real module, not a script).
 How it interacts with other folders: calls into `ingestion/` and `config/` to do its work; nothing calls
 into `scripts/`.
 
-### `backend/tests/` — automated tests (empty until step 2)
+### `backend/tests/` — automated tests (active since step 2)
 
-What belongs here: a pytest suite mirroring the rest of the backend (`test_engine.py` for `simulation/`,
-etc.), replacing the ad hoc `assert` statements currently inline in `examples/poc_grid.py`'s `main()`.
+What belongs here: a pytest suite mirroring the rest of the backend — currently `test_engine.py`
+(mass conservation, non-negative depth, input validation, the Manning directional-steering effect, and
+a checkerboard-artifact regression), supplementing the ad hoc `assert` statements still kept inline in
+`examples/poc_grid.py`'s `main()` for interactive sanity-checking while running the demo. Run with
+`.venv/bin/pytest tests/` from `backend/`.
 
 What does NOT belong here: manual/visual demos (`examples/`) — tests should be automated and assertion-
 based, runnable without a human looking at a plot.
@@ -179,14 +182,22 @@ file. No code.
 
 ## 5. Explanation of important files
 
-- **`backend/simulation/engine.py`** — the whole CA engine today: `step(Z, H, outflow_fraction=0.5)`.
-  Pads `Z`/`H` so the grid boundary is a closed wall, computes water-surface elevation `WSE = Z + H`,
-  distributes each cell's outflow to downhill Moore neighbors weighted by `drop / distance` (diagonal
-  neighbors get a longer distance, per the TCC's note on geometric distortion), capped at
-  `outflow_fraction` of the cell's depth per step for numerical stability. Pure NumPy, no side effects.
+- **`backend/simulation/engine.py`** — the whole CA engine today: `step(Z, H, N, outflow_fraction=0.5)`.
+  Pads `Z`/`H`/`N` so the grid boundary is a closed wall, computes water-surface elevation `WSE = Z + H`,
+  distributes each cell's outflow to downhill Moore neighbors weighted by `sqrt(slope) / n` (slope =
+  drop/distance, diagonal neighbors get a longer distance per the TCC's note on geometric distortion;
+  `n` = the receiving neighbor's Manning roughness — a documented modeling choice, since the TCC's own
+  wording doesn't specify source vs. destination cell), capped at `outflow_fraction` of the cell's depth
+  per step for numerical stability. Internally, that per-step
+  release is carried out as several smaller synchronous sub-updates (`_MAX_STABLE_SUBSTEP_FRACTION`)
+  rather than one single release, which avoids a checkerboard/speckle instability a single large release
+  causes (same family of issue as violating a CFL condition) without changing `step`'s external signature
+  or how much water moves per call — see `docs/project-plan.md`'s "Engine design notes" for the
+  investigation. Pure NumPy, no side effects.
 - **`backend/examples/poc_grid.py`** — builds a synthetic bowl-plus-hill terrain, seeds a pool of water,
   runs `simulation.engine.step` in a loop for a fixed number of iterations, asserting mass conservation
-  and non-negative depth after every step, then plots terrain vs. final depth. This is currently the
+  and non-negative depth after every step, then plots terrain vs. depth at several snapshots in time
+  (not just before/after) so the spread can actually be watched, not just the end state. This is currently the
   *only* place a multi-step run loop exists — `simulation/` itself only exposes a single step. If `api/`
   later needs the same "run N steps and check conservation" behavior, extracting that loop into a shared
   `simulation` runner function is a reasonable future refactor — not done yet, since it's not needed until
