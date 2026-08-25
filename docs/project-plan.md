@@ -51,6 +51,10 @@ This is skeleton only, not real step 5 work: no config loading, no wiring to `si
 WebSocket streaming yet. Steps 2–4 (Manning roughness, real DEM ingestion, real land-cover data) are
 still the actual next work before `api/` does anything beyond the health check.
 
+**Note (out of order):** also at the user's explicit request, a minimal `backend/Dockerfile` and a
+root `docker-compose.yml` (single `backend` service, port 8000) were added ahead of schedule —
+normally step 7. There's no frontend service yet since `frontend/` is still an empty stub (step 6).
+
 ## Structure so far
 
 The full target folder structure (including the folders scaffolded ahead of need, each with a README
