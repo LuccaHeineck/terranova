@@ -1,6 +1,6 @@
 # data
 
-Empty for now — populated starting roadmap step 3.
+Populated locally starting roadmap step 3 (contents gitignored, folders kept via `.gitkeep`).
 
 Not code — this holds the actual geodata files: DEM tiles (SRTM/TOPODATA), MapBiomas land-cover rasters,
 and validation ground-truth (High-Water Marks, SWOT altimetry) for the 2023/2024 floods.
