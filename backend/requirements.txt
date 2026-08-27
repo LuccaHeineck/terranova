@@ -3,3 +3,6 @@ matplotlib
 fastapi
 uvicorn[standard]
 pytest
+rasterio
+requests
+python-dotenv
