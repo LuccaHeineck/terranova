@@ -36,11 +36,11 @@ terranova/
 │   ├── simulation/     # core CA engine — the domain/business logic (HAS CODE)
 │   ├── examples/        # PoC/demo entrypoints, e.g. poc_grid.py, poc_real_dem.py (HAS CODE)
 │   ├── ingestion/        # DEM + land-cover data processing (HAS CODE — DEM + land-cover both done)
-│   ├── api/              # FastAPI + WebSocket (empty — step 5)
+│   ├── api/              # FastAPI + WebSocket (HAS CODE — REST + WebSocket simulation routes)
 │   ├── validation/       # CSI/RMSE metrics (empty — step 8)
 │   ├── config/           # settings/paths/parameters (HAS CODE — ROI, CRS, DEM/land-cover source, data paths)
 │   ├── scripts/          # ops CLI tooling (HAS CODE — download_dem.py, download_landcover.py)
-│   ├── tests/            # pytest suite (HAS CODE — test_engine.py, test_ingestion.py, test_landcover.py)
+│   ├── tests/            # pytest suite (HAS CODE — test_engine.py, test_ingestion.py, test_landcover.py, test_api.py)
 │   └── requirements.txt
 ├── data/                  # raw/processed geodata + validation ground-truth (gitignored contents)
 │   ├── raw/                # e.g. the downloaded SRTMGL1 tile
@@ -103,10 +103,14 @@ What does NOT belong here: the actual data files (that's `data/`), and no CA log
 How it interacts with other folders: reads from `data/raw/`, writes to `data/processed/`, uses `config/`
 for file paths. Called by `api/` (and later `scripts/` for offline preprocessing runs).
 
-### `backend/api/` — orchestration + network boundary (empty until step 5)
+### `backend/api/` — orchestration + network boundary (has code since step 5)
 
-What belongs here: the FastAPI app — REST endpoints to configure/start a run, a WebSocket channel
-streaming simulation frames every N iterations.
+What belongs here: the FastAPI app — `POST /simulations` to validate parameters and register a run,
+`WS /simulations/{run_id}/stream` to run it and stream a JSON frame (`{step, depth, volume}`) every
+`frame_interval` steps. `state.py` holds the currently loaded `Z`/`N` arrays (built once at startup via
+a `lifespan`, not per-request), exposed as FastAPI dependencies rather than read directly off `app.state`
+so tests can swap in small synthetic arrays via `app.dependency_overrides`. Serves the real
+Lajeado/Estrela grid only — no synthetic-grid option, since `api/` may never import `examples/`.
 
 What does NOT belong here: any CA math (delegates to `simulation/`), any raster parsing (delegates to
 `ingestion/`).
@@ -152,10 +156,12 @@ into `scripts/`.
 What belongs here: a pytest suite mirroring the rest of the backend — `test_engine.py` (mass
 conservation, non-negative depth, input validation, the Manning directional-steering effect, and a
 checkerboard-artifact regression), `test_ingestion.py` (DEM sink-filling, nodata cropping, reprojection),
-and `test_landcover.py` (Manning's-n class lookup, the nearest-vs-bilinear resampling regression, and
-roughness-matrix grid alignment) — supplementing the ad hoc `assert` statements still kept inline in
-`examples/poc_grid.py`'s `main()` for interactive sanity-checking while running the demo. Run with
-`.venv/bin/pytest tests/` from `backend/`.
+`test_landcover.py` (Manning's-n class lookup, the nearest-vs-bilinear resampling regression, and
+roughness-matrix grid alignment), and `test_api.py` (REST validation, WebSocket frame streaming and mass
+conservation, run-id lifecycle — using `TestClient` with `app.dependency_overrides` and no `with` block,
+so the app's real data-loading lifespan never runs) — supplementing the ad hoc `assert` statements still
+kept inline in `examples/poc_grid.py`'s `main()` for interactive sanity-checking while running the demo.
+Run with `.venv/bin/pytest tests/` from `backend/`.
 
 What does NOT belong here: manual/visual demos (`examples/`) — tests should be automated and assertion-
 based, runnable without a human looking at a plot.

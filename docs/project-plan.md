@@ -113,18 +113,46 @@ used to rely on:
   (10 from steps 2–3 + 4 new).
 - No new dependencies — `rasterio`'s bundled GDAL already handles `/vsicurl/` HTTP range reads.
 
-Next up is **step 5**: wrap the engine in FastAPI (REST endpoint(s) for simulation parameters, a
-WebSocket channel streaming frames every N iterations).
+**Step 5 done.** The engine is now wrapped in a real FastAPI service, serving the real Lajeado/Estrela
+grid built in steps 3–4:
+- **`POST /simulations`** validates parameters (`steps`, `frame_interval`, `outflow_fraction` — pydantic
+  `Field` constraints give free 422s on bad input) and registers a run in an in-memory dict, returning a
+  `run_id` and the real `grid_shape`. **`WS /simulations/{run_id}/stream`** pops that run (so each one
+  streams exactly once — no persistence layer, matching the project's "no DB" decision), seeds a pool at
+  the terrain's lowest point, and runs `simulation.engine.step` in a loop, sending one JSON frame
+  (`{"step", "depth", "volume"}`) every `frame_interval` steps plus a final `{"done": true}`. Mass
+  conservation is asserted every step, same as the example scripts.
+- **Two design decisions**: frames are plain JSON numeric arrays, not the base64-PNG format
+  `docs/tcc-summary.md`'s planned architecture describes — simpler and directly testable without a
+  frontend; PNG (or another binary format) can replace this once Leaflet (step 6) actually needs an
+  image. And the API serves only the real grid, no synthetic-grid option — `api/` may only depend on
+  `config/`/`ingestion/`/`simulation/`/`validation/` (never `examples/`, which nothing else imports per
+  `docs/ARCHITECTURE.md`), and there's already real ingested data worth serving by this step.
+- **`backend/api/state.py`** holds the loaded `Z`/`N` (built once at startup via a FastAPI `lifespan`,
+  not per-request — the ingestion functions do real raster I/O), exposed as FastAPI dependencies rather
+  than read directly off `app.state` so tests can swap in tiny synthetic arrays via
+  `app.dependency_overrides` instead of needing the real downloaded files.
+- **Shared seeding helper**: `seed_pool_at_lowest_point` moved from `examples/poc_real_dem.py` into
+  `simulation/engine.py` so both it and the new API route share one implementation — the refactor
+  `docs/ARCHITECTURE.md` already flagged as reasonable "once a second caller exists."
+- **`backend/tests/test_api.py`** (7 new tests): REST validation (valid/invalid params), WebSocket
+  streaming (frame shape/interval, final `done`, mass conservation mid-stream), unknown-`run_id`
+  rejection, and single-use run consumption. Uses `TestClient` *without* the `with` context manager, so
+  the app's real data-loading lifespan never runs — combined with `dependency_overrides`, this keeps the
+  suite network- and file-free like every other step. Needed a new dependency, `httpx2` (the package
+  this environment's `starlette.testclient` requires). Full suite: 22/22 passing.
+- **Known limitation, not fixed now**: `docker-compose.yml`'s `backend` service builds from `./backend`
+  as its Docker context and has no access to (or volume mount for) the repo-root `data/` directory, so
+  `docker-compose up` currently fails once the lifespan tries to load real data. Docker Compose itself is
+  step 7's concern (it was added ahead of schedule) — verified locally via `uvicorn` instead (REST +
+  WebSocket both confirmed end-to-end against the real grid: `grid_shape: [183, 192]`, frames arriving at
+  the requested interval, volume conserved to floating-point precision, ending in `done`).
+
+Next up is **step 6**: the React + Vite + Leaflet frontend.
 
 To run it: `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 
-**Note (out of order):** at the user's explicit request, a minimal FastAPI skeleton
-(`backend/api/main.py`, a single `GET /health` route) was added ahead of schedule — normally step 5.
-This is skeleton only, not real step 5 work: no config loading, no wiring to `simulation/`, no
-WebSocket streaming yet. Steps 2–4 (Manning roughness, real DEM ingestion, real land-cover data) are
-now done — real step 5 work (wiring `api/` to `simulation/`/`ingestion/`, WebSocket streaming) is next.
-
-**Note (out of order):** also at the user's explicit request, a minimal `backend/Dockerfile` and a
+**Note (out of order):** at the user's explicit request, a minimal `backend/Dockerfile` and a
 root `docker-compose.yml` (single `backend` service, port 8000) were added ahead of schedule —
 normally step 7. There's no frontend service yet since `frontend/` is still an empty stub (step 6).
 
@@ -136,14 +164,22 @@ read that for the whole picture. What actually has code in it today:
 
 ```
 backend/
-  requirements.txt   # numpy, matplotlib, fastapi, uvicorn, pytest, rasterio, requests, python-dotenv
+  requirements.txt   # numpy, matplotlib, fastapi, uvicorn, pytest, httpx2, rasterio, requests, python-dotenv
   simulation/
     __init__.py
-    engine.py         # core CA step function — pure NumPy, no I/O, no geodata
+    engine.py         # core CA step function + seed_pool_at_lowest_point — pure NumPy, no I/O, no geodata
   examples/
     __init__.py
     poc_grid.py        # small artificial-grid demo: fake terrain, pool of water, run N steps, plot/check
     poc_real_dem.py     # same idea, on the real Lajeado/Estrela elevation matrix (step 3)
+  api/
+    __init__.py
+    main.py             # FastAPI() app, lifespan loads Z/N once, includes routers (step 5)
+    state.py            # holds loaded Z/N, exposed as overridable FastAPI dependencies (step 5)
+    routers/
+      __init__.py
+      health.py         # GET /health -> {"status": "ok"}
+      simulations.py    # POST /simulations, WS /simulations/{run_id}/stream (step 5)
   ingestion/
     __init__.py
     dem.py              # raw GeoTIFF -> reproject -> crop -> sink-fill -> Z array (step 3)
@@ -160,11 +196,12 @@ backend/
     test_engine.py
     test_ingestion.py
     test_landcover.py
+    test_api.py
 ```
 
-`api/` and `validation/` still exist as empty, README-documented placeholders — no code yet, added in
-later steps once each preceding core is validated. `data/raw/` and `data/processed/` now hold real
-(gitignored) files once `download_dem.py` and the ingestion pipeline have been run locally.
+`validation/` still exists as an empty, README-documented placeholder — no code yet, added in step 8.
+`data/raw/` and `data/processed/` now hold real (gitignored) files once `download_dem.py`/
+`download_landcover.py` and the ingestion pipelines have been run locally.
 
 ## Engine design notes (steps 1-2)
 
@@ -183,11 +220,11 @@ First version (deliberately simpler than the TCC's full documented model): redis
 ## Roadmap (incremental, each step validated before the next)
 
 1. **Core CA engine + synthetic proof of concept** *(done)* — `engine.py` with the step function; `poc_grid.py` builds a small synthetic terrain (e.g. two Gaussian bumps — one hill, one basin), places a concentrated pool of water in the center, runs N iterations in a closed system (no rain/infiltration). Validate: total volume stays constant (mass conservation), depth never goes negative, water visually spreads toward the basin while the hill acts as a barrier — same qualitative result as the TCC's Figure 11.
-2. **Add Manning roughness weighting** *(done — current step)* — introduce a synthetic roughness matrix `N`, extend the transition rule to match the TCC's full documented equation (`Q_i = (1/n_i) h_i^(5/3) sqrt(S_i)`), still on artificial grids.
+2. **Add Manning roughness weighting** *(done)* — introduce a synthetic roughness matrix `N`, extend the transition rule to match the TCC's full documented equation (`Q_i = (1/n_i) h_i^(5/3) sqrt(S_i)`), still on artificial grids.
 3. **Real DEM ingestion** *(done)* — `rasterio` + a hand-rolled priority-flood sink filler; downloaded/clipped a real SRTMGL1 tile (via OpenTopography) for a small Lajeado/Estrela test box, reprojected to a metric CRS with square pixels, sink-filled it, and ran the validated engine on real terrain (still no roughness-from-data or historical validation yet).
 4. **Real land-cover / roughness data** *(done)* — MapBiomas Collection 10 raster → Manning's n lookup table → real `N` matrix, replacing the synthetic uniform one `poc_real_dem.py` previously used.
-5. **Wrap in FastAPI** *(current step)* — REST endpoint(s) for simulation parameters, WebSocket channel streaming frames every N iterations. Still no frontend — test with a simple script/client or `curl`/websocket CLI.
-6. **React + Vite + Leaflet frontend** — config panel, live map overlay fed by the WebSocket stream, log/metrics panel (loosely following the Figure 12 mockup from the TCC).
+5. **Wrap in FastAPI** *(done)* — `POST /simulations` + `WS /simulations/{run_id}/stream`, serving the real Lajeado/Estrela grid with JSON numeric frames. Still no frontend — verified with `curl` + a `websockets` script.
+6. **React + Vite + Leaflet frontend** *(current step)* — config panel, live map overlay fed by the WebSocket stream, log/metrics panel (loosely following the Figure 12 mockup from the TCC).
 7. **Docker Compose** — containerize backend + frontend + static data volume.
 8. **Validation against real events** — HWM and SWOT data for the 2023/2024 floods, CSI (spatial) and RMSE (depth) metrics, performance benchmarking (vectorized NumPy vs. loops, exploratory CuPy/GPU).
 
