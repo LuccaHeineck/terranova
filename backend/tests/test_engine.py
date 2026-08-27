@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from simulation.engine import step
+from simulation.engine import seed_pool_at_lowest_point, step
 
 
 def test_mass_conservation_and_nonnegative_depth():
@@ -99,3 +99,15 @@ def test_no_checkerboard_artifact_with_varying_roughness():
     roughness = np.abs(H[flooded] - neighbor_mean[flooded]).mean()
 
     assert roughness < 0.05, f"speckle artifact detected: roughness={roughness:.5f}"
+
+
+def test_seed_pool_at_lowest_point_seeds_full_volume_at_the_minimum():
+    rows, cols = 10, 10
+    Z = np.full((rows, cols), 10.0)
+    Z[7, 3] = 0.0  # the terrain's lowest point, off-center on purpose
+    H = np.zeros((rows, cols))
+
+    seed_pool_at_lowest_point(Z, H, volume=50.0)
+
+    assert H.sum() == pytest.approx(50.0)
+    assert H[7, 3] > 0.0

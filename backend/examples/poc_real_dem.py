@@ -28,21 +28,12 @@ import numpy as np
 from config import settings
 from ingestion.dem import build_elevation_matrix
 from ingestion.landcover import build_roughness_matrix
-from simulation.engine import step
+from simulation.engine import seed_pool_at_lowest_point, step
 
 STEPS = 100
 SEED_VOLUME = 400.0
 OUTPUT_PATH = "poc_real_dem_result.png"
 SNAPSHOT_STEPS = (0, 5, 10, 15, 50)
-
-
-def seed_pool_at_lowest_point(Z: np.ndarray, H: np.ndarray, volume: float) -> None:
-    """Seed the water pool centered on the terrain's lowest point (the river channel)."""
-    ry, rx = np.unravel_index(np.argmin(Z), Z.shape)
-    ry = int(np.clip(ry, 2, Z.shape[0] - 3))
-    rx = int(np.clip(rx, 2, Z.shape[1] - 3))
-    patch = H[ry - 2: ry + 3, rx - 2: rx + 3]
-    patch[:] = volume / patch.size
 
 
 def main() -> None:

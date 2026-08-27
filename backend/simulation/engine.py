@@ -112,3 +112,18 @@ def step(Z: np.ndarray, H: np.ndarray, N: np.ndarray, outflow_fraction: float = 
     for _ in range(n_substeps):
         H = _single_update(Zp, Np, H, substep_fraction)
     return H
+
+
+def seed_pool_at_lowest_point(Z: np.ndarray, H: np.ndarray, volume: float) -> None:
+    """Seed a concentrated water pool centered on the terrain's lowest point
+    (e.g. a river channel), in place on `H`.
+
+    Shared by every caller that needs a sensible default starting condition on
+    real terrain (`examples/poc_real_dem.py`, `api/`'s simulation route) rather
+    than each defining its own copy.
+    """
+    ry, rx = np.unravel_index(np.argmin(Z), Z.shape)
+    ry = int(np.clip(ry, 2, Z.shape[0] - 3))
+    rx = int(np.clip(rx, 2, Z.shape[1] - 3))
+    patch = H[ry - 2: ry + 3, rx - 2: rx + 3]
+    patch[:] = volume / patch.size
