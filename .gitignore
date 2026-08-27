@@ -4,5 +4,12 @@ TCC1LuccaHeineck.pdf
 __pycache__/
 *.pyc
 backend/poc_grid_result.png
+backend/poc_real_dem_result.png
+backend/.env
+
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
 
 .claude/scheduled_tasks.lock
