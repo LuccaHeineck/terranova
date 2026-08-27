@@ -34,17 +34,17 @@ itself is a dependency-free library that doesn't know any of this exists.
 terranova/
 ├── backend/
 │   ├── simulation/     # core CA engine — the domain/business logic (HAS CODE)
-│   ├── examples/        # PoC/demo entrypoints, e.g. poc_grid.py (HAS CODE)
-│   ├── ingestion/        # DEM + land-cover data processing (empty — step 3/4)
+│   ├── examples/        # PoC/demo entrypoints, e.g. poc_grid.py, poc_real_dem.py (HAS CODE)
+│   ├── ingestion/        # DEM + land-cover data processing (HAS CODE — DEM + land-cover both done)
 │   ├── api/              # FastAPI + WebSocket (empty — step 5)
 │   ├── validation/       # CSI/RMSE metrics (empty — step 8)
-│   ├── config/           # settings/paths/parameters (empty — starts step 3)
-│   ├── scripts/          # future ops CLI tooling (empty — step 3+)
-│   ├── tests/            # pytest suite (empty — starts step 2)
+│   ├── config/           # settings/paths/parameters (HAS CODE — ROI, CRS, DEM/land-cover source, data paths)
+│   ├── scripts/          # ops CLI tooling (HAS CODE — download_dem.py, download_landcover.py)
+│   ├── tests/            # pytest suite (HAS CODE — test_engine.py, test_ingestion.py, test_landcover.py)
 │   └── requirements.txt
-├── data/                  # raw/processed geodata + validation ground-truth (empty — step 3)
-│   ├── raw/
-│   └── processed/
+├── data/                  # raw/processed geodata + validation ground-truth (gitignored contents)
+│   ├── raw/                # e.g. the downloaded SRTMGL1 tile
+│   └── processed/          # e.g. the reprojected, sink-filled elevation GeoTIFF
 ├── frontend/              # empty stub — filled starting step 6
 ├── docs/
 │   ├── project-plan.md    # roadmap + current status
@@ -87,11 +87,15 @@ Why it's separate from `scripts/`: a demo that shows the engine working is a dif
 an operational tool that helps run the project (like a future DEM-download CLI). Keeping them apart means
 "how do I see the engine work" and "how do I do X to the project" never end up in the same junk drawer.
 
-### `backend/ingestion/` — data processing (empty until step 3)
+### `backend/ingestion/` — data processing (DEM since step 3, land-cover since step 4)
 
-What belongs here: code that turns raw geodata into the arrays `simulation/` consumes — reading DEM
-tiles with `rasterio`, sink filling, clipping to the region of interest (step 3), and applying the
-MapBiomas land-cover → Manning's-n lookup table to build the roughness matrix `N` (step 4).
+What belongs here: code that turns raw geodata into the arrays `simulation/` consumes. `dem.py` (step 3):
+reprojects a raw DEM GeoTIFF to a projected metric CRS with square pixels, crops reprojection's nodata
+border artifacts, and sink-fills it (a hand-rolled `heapq` priority-flood — `pysheds`/`richdem` were
+tried first but `pysheds`'s `numba` JIT currently fails to compile on this project's Python 3.14).
+`landcover.py` (step 4): aligns a raw MapBiomas land-cover classification raster onto the processed DEM's
+exact grid (nearest-neighbor resampling, since class IDs are categorical) and maps class IDs to Manning's
+n via a static lookup table to build the roughness matrix `N`.
 
 What does NOT belong here: the actual data files (that's `data/`), and no CA logic (that's
 `simulation/`) — this folder only transforms inputs, it never runs the simulation.
@@ -121,7 +125,7 @@ What does NOT belong here: simulation logic or data loading — it consumes arra
 How it interacts with other folders: depends on `simulation/` (output) and `data/` (ground truth).
 Independent of `api/` — it's a metrics library, usable from `api/`, `scripts/`, or standalone.
 
-### `backend/config/` — settings (empty until step 3)
+### `backend/config/` — settings (has code since step 3)
 
 What belongs here: things that are currently just hardcoded constants in `examples/poc_grid.py` (grid
 size, `outflow_fraction`) plus things that don't exist yet — DEM/lookup-table file paths (step 3-4), API
@@ -132,7 +136,7 @@ What does NOT belong here: any logic — this is pure settings, no imports from 
 How it interacts with other folders: everything else may import `config/`; it never imports anything
 back. It's a dependency leaf, same shape as `simulation/` but for settings instead of math.
 
-### `backend/scripts/` — ops tooling (empty until step 3+)
+### `backend/scripts/` — ops tooling (has code since step 3)
 
 What belongs here: one-off operational utilities that support running the project — e.g. a future CLI to
 download/clip a DEM tile, or trigger a preprocessing batch job.
@@ -145,9 +149,11 @@ into `scripts/`.
 
 ### `backend/tests/` — automated tests (active since step 2)
 
-What belongs here: a pytest suite mirroring the rest of the backend — currently `test_engine.py`
-(mass conservation, non-negative depth, input validation, the Manning directional-steering effect, and
-a checkerboard-artifact regression), supplementing the ad hoc `assert` statements still kept inline in
+What belongs here: a pytest suite mirroring the rest of the backend — `test_engine.py` (mass
+conservation, non-negative depth, input validation, the Manning directional-steering effect, and a
+checkerboard-artifact regression), `test_ingestion.py` (DEM sink-filling, nodata cropping, reprojection),
+and `test_landcover.py` (Manning's-n class lookup, the nearest-vs-bilinear resampling regression, and
+roughness-matrix grid alignment) — supplementing the ad hoc `assert` statements still kept inline in
 `examples/poc_grid.py`'s `main()` for interactive sanity-checking while running the demo. Run with
 `.venv/bin/pytest tests/` from `backend/`.
 
@@ -157,7 +163,7 @@ based, runnable without a human looking at a plot.
 How it interacts with other folders: imports from `simulation/`, `ingestion/`, `validation/`, etc. to
 test them. Nothing imports `tests/` — it's a leaf.
 
-### `data/` — raw and processed geodata (empty until step 3)
+### `data/` — raw and processed geodata (populated locally since step 3, gitignored)
 
 What belongs here: the actual files — DEM tiles, MapBiomas rasters, HWM/SWOT validation datasets — split
 into `raw/` (as downloaded) and `processed/` (what `ingestion/` produces).
