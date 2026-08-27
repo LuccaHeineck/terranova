@@ -3,6 +3,7 @@ matplotlib
 fastapi
 uvicorn[standard]
 pytest
+httpx2
 rasterio
 requests
 python-dotenv
