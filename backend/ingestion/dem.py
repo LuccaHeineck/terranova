@@ -31,7 +31,7 @@ from pathlib import Path
 import numpy as np
 import rasterio
 from affine import Affine
-from rasterio.warp import calculate_default_transform, reproject, Resampling
+from rasterio.warp import calculate_default_transform, reproject, Resampling, transform_bounds
 
 from config import settings
 
@@ -176,3 +176,18 @@ def build_elevation_matrix(
         dst.write(filled, 1)
 
     return filled
+
+
+def get_geographic_bounds(
+    processed_path: Path = settings.DEM_PROCESSED_PATH,
+) -> tuple[float, float, float, float]:
+    """Return (west, south, east, north) WGS84 degrees for the processed grid's exact extent.
+
+    Reads the *processed* GeoTIFF's own transform/CRS - already reprojected and nodata-cropped
+    by `build_elevation_matrix` - rather than the raw `ROI_*` constants in `config/settings.py`,
+    which describe a slightly larger pre-crop box. This is the precise extent callers need to
+    place the Z/H grid on a real-world map.
+    """
+    with rasterio.open(processed_path) as src:
+        west, south, east, north = transform_bounds(src.crs, "EPSG:4326", *src.bounds)
+    return west, south, east, north

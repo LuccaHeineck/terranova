@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from api.main import app
-from api.routers.simulations import get_roughness, get_terrain
+from api.routers.simulations import get_bounds, get_roughness, get_terrain
 
 # Deliberately not using `with TestClient(app) as client:` - that would run
 # the app's real lifespan (build_elevation_matrix/build_roughness_matrix),
@@ -13,9 +13,11 @@ from api.routers.simulations import get_roughness, get_terrain
 # below, these tests stay network- and file-free like the rest of the suite.
 TEST_Z = np.array([[10.0, 10.0, 10.0], [10.0, 0.0, 10.0], [10.0, 10.0, 10.0]])
 TEST_N = np.full((3, 3), 0.05)
+TEST_BOUNDS = (-51.99, -29.505, -51.93, -29.455)
 
 app.dependency_overrides[get_terrain] = lambda: TEST_Z
 app.dependency_overrides[get_roughness] = lambda: TEST_N
+app.dependency_overrides[get_bounds] = lambda: TEST_BOUNDS
 
 client = TestClient(app)
 
@@ -34,6 +36,7 @@ def test_create_simulation_returns_run_id_and_grid_shape():
     body = response.json()
     assert "run_id" in body
     assert body["grid_shape"] == [3, 3]
+    assert body["bounds"] == {"west": -51.99, "south": -29.505, "east": -51.93, "north": -29.455}
 
 
 @pytest.mark.parametrize("params", [{"steps": 0, "frame_interval": 5}, {"steps": 5, "frame_interval": 5, "outflow_fraction": 0.0}])
