@@ -288,3 +288,51 @@ First version (deliberately simpler than the TCC's full documented model): redis
 8. **Validation against real events** — HWM and SWOT data for the 2023/2024 floods, CSI (spatial) and RMSE (depth) metrics, performance benchmarking (vectorized NumPy vs. loops, exploratory CuPy/GPU).
 
 Update the "Current status" section above as steps complete — this file is meant to be read at the start of future sessions instead of re-deriving the plan from scratch.
+
+## Possible future features (ideas, not yet scheduled)
+
+Raised in session while trying out the step-6 frontend and discussing what would make the demo feel
+like an actual usable flood simulator rather than just validated mechanics. Unlike the numbered
+roadmap above (sequential, each step a prerequisite for the next), these are independent candidate
+enhancements — not committed to, not ordered, and not required for steps 7-8. Grouped by how much
+they'd cost and whether they touch the TCC's documented model:
+
+**Cheap — UI/plumbing only, no engine or model changes:**
+- Expose seed volume as a real config-panel parameter (currently hardcoded `SEED_VOLUME = 400.0` in
+  `backend/api/routers/simulations.py`, not user-controllable at all).
+- Click-to-place seed location on the map, instead of always seeding at the terrain's lowest point
+  (`seed_pool_at_lowest_point` in `simulation/engine.py`) — needs a small API addition to accept a
+  start coordinate, but no change to the transition rule itself.
+- Visual polish: better depth→color ramp/legend (current one is a quick orange-red fix for
+  visibility, not a designed palette), smoother frame-to-frame transitions, terrain shading under
+  the flood overlay, general UI/layout polish.
+- Timeline scrubber: buffer received frames client-side (`{step, depth, volume}` per frame already
+  has everything needed) and add a slider to re-render any past frame instead of only ever showing
+  the live one. Fully independent of every other item here — buildable against what already exists
+  today.
+
+**Moderate — small engine option, no change to the documented base model:**
+- Neighborhood-type toggle (Moore vs. von Neumann) in the config panel — the engine is Moore-only
+  today; von Neumann would be a genuinely new, smaller-neighborhood code path, not just a flag.
+
+**Bigger — real modeling changes, a deliberate scope decision for the thesis, not just engineering:**
+- **Rain input** (rate/duration exposed in the UI): needs a source term that injects volume into
+  `H` every step (e.g. mm/hr converted to volume/cell/step). Technically straightforward, but the
+  TCC's documented base model is explicitly *closed, no rain/infiltration* — this changes the
+  validated invariant from "total volume constant" to "final volume = initial + cumulative rain
+  input" (still checkable, just a different one), and changes what the thesis is claiming to model.
+  Should be a deliberate choice, not a quiet addition — flagged as worth discussing with an advisor.
+- **Initial river stage / boundary inflow**: a different kind of input than a one-time seed pool —
+  water entering continuously from one edge of the grid (e.g. simulating upstream discharge). The
+  engine currently has no notion of an open boundary at all, only closed walls (`+inf`/`0` padding
+  is what makes exact mass conservation testable in the first place) — this is a bigger structural
+  change, same "open system, new scope decision" category as rain.
+- **Real elapsed time (minutes/hours) instead of abstract step counts**: there's currently no real
+  timestep (`dt`) anywhere, only a real cell size (`dx = 30m`, from step 3). Needs deriving `dt` from
+  Manning flow velocities under a CFL-style stability condition — standard technique in 2D flood CA
+  literature, but new work, not a config toggle. Most meaningful paired with a real driving input
+  (rain or boundary inflow above) — a one-time closed-system redistribution doesn't have a strong
+  "when does the water arrive" story on its own.
+- Together with step 8 (validation against the real 2023/2024 events), these three would be what
+  actually makes results feel like "a real simulation" rather than validated mechanics on arbitrary
+  units and an arbitrary seed volume.
