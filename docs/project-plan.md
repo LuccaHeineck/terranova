@@ -148,13 +148,52 @@ grid built in steps 3–4:
   WebSocket both confirmed end-to-end against the real grid: `grid_shape: [183, 192]`, frames arriving at
   the requested interval, volume conserved to floating-point precision, ending in `done`).
 
-Next up is **step 6**: the React + Vite + Leaflet frontend.
+**Step 6 done.** The React + Vite + Leaflet frontend now drives the real backend end-to-end:
+- **Two small backend additions the frontend needed**: `CORSMiddleware` in `backend/api/main.py`
+  (explicit `localhost:5173`/`127.0.0.1:5173` dev origins, not a wildcard), and a new
+  `bounds: {west, south, east, north}` field on `POST /simulations`'s response. `bounds` is *not*
+  derived from the raw `ROI_*` constants in `config/settings.py` — those describe the pre-crop
+  download box — but from a new `ingestion/dem.py::get_geographic_bounds()`, which reads the
+  *processed* GeoTIFF's own transform via `rasterio.warp.transform_bounds`, since
+  `crop_nodata_border` trims the served grid slightly smaller than the raw ROI. Wired through
+  `api/state.py::BOUNDS`/`get_bounds()` alongside the existing `Z`/`N` pattern. `test_api.py`
+  updated to override/assert it; 22/22 tests still pass.
+- **`frontend/`** (npm, Tailwind CSS v4, no test framework — deferred per user decision): a
+  three-column layout (`ConfigPanel` | `FloodMap` | `LogPanel`). `useSimulationRun` is the
+  orchestration hook (`idle -> starting -> streaming -> done | error`) wrapping `POST /simulations`
+  then the WebSocket stream. `FloodMap` uses plain Leaflet (not `react-leaflet`) with OSM tiles and
+  a single `L.ImageOverlay` updated via `setUrl()` each frame, positioned with the real `bounds`
+  from the API (`map.fitBounds()` on run start). Each `{step, depth, volume}` frame is rasterized
+  client-side (`rendering/depthToImage.ts`) — no backend PNG encoding added, matching step 5's
+  documented "add PNG only when the frontend actually needs it" decision. `LogPanel` shows
+  status/grid_shape/bounds and a scrolling `step N: volume=...` log; the WebSocket wrapper
+  (`api/stream.ts`) explicitly handles the unknown/consumed-`run_id` case (server closes with
+  `code=4004` *before* `accept()`, so it only ever surfaces via `onclose`, never a JSON message) and
+  any mid-stream disconnect, both shown as a visible error banner rather than a frozen UI.
+- **Verified live in a browser** (Playwright driving real Chromium against the real running
+  backend + `npm run dev`, not just `tsc`): a 100-step run against the real 183×192 Lajeado/Estrela
+  grid streamed 20 frames, volume held at exactly `400.0000` throughout, and the rendered flood
+  overlay traced the real river channel's meander shape (confirmed by extracting the raw overlay
+  PNG and comparing its shape directly against the OSM basemap's river geometry) — including
+  catching and fixing a real UX bug this way: the initial blue-tinted color ramp was visually
+  invisible against OSM's own blue river tiles, so the ramp was changed to high-contrast
+  orange-red. Also verified the error path by force-killing the backend mid-stream: the UI
+  correctly transitions to a visible "Stream closed unexpectedly (code 1006)" error state instead
+  of hanging.
+- **Deferred, not done in this step**: Docker Compose wiring for `frontend/` (step 7 — the known
+  `data/`-volume-mount gap from step 5 is still unresolved for `backend` too); Vitest/RTL frontend
+  tests; CSI/RMSE validation UI (step 8); CORS-origin configurability beyond the hardcoded
+  localhost list.
+
+Next up is **step 7**: Docker Compose (containerize backend + frontend + a shared data volume,
+and fix the known `data/`-mount gap from step 5 along the way).
 
 To run it: `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 
 **Note (out of order):** at the user's explicit request, a minimal `backend/Dockerfile` and a
 root `docker-compose.yml` (single `backend` service, port 8000) were added ahead of schedule —
-normally step 7. There's no frontend service yet since `frontend/` is still an empty stub (step 6).
+normally step 7. The frontend service still isn't wired into it — `docker-compose.yml` remains
+backend-only for now, tracked as part of step 7.
 
 ## Structure so far
 
@@ -197,6 +236,26 @@ backend/
     test_ingestion.py
     test_landcover.py
     test_api.py
+frontend/
+  package.json        # react, react-dom, leaflet, tailwindcss/@tailwindcss/vite (npm, TypeScript, Vite)
+  vite.config.ts        # @vitejs/plugin-react + @tailwindcss/vite
+  src/
+    main.tsx              # imports leaflet.css + index.css (Tailwind), renders <App/>
+    App.tsx                # 3-column layout: ConfigPanel | FloodMap | LogPanel
+    index.css                # @import "tailwindcss";
+    types/simulation.ts        # TS mirror of the backend JSON contract (incl. Bounds)
+    api/
+      config.ts                 # API_BASE_URL / WS_BASE_URL (VITE_API_BASE_URL, default localhost:8000)
+      client.ts                  # createSimulation() -> POST /simulations
+      stream.ts                   # openSimulationStream() -> WebSocket wrapper (handles code 4004, disconnects)
+    hooks/
+      useSimulationRun.ts          # orchestration state machine: idle -> starting -> streaming -> done|error
+    rendering/
+      depthToImage.ts               # depth[][] -> canvas data URL, orange-red ramp (transparent at 0 depth)
+    components/
+      ConfigPanel.tsx                # steps/frame_interval/outflow_fraction form
+      FloodMap.tsx                    # plain Leaflet + OSM tiles + L.ImageOverlay, positioned via API bounds
+      LogPanel.tsx                     # status/grid_shape/bounds + scrolling step/volume log + error banner
 ```
 
 `validation/` still exists as an empty, README-documented placeholder — no code yet, added in step 8.
@@ -224,8 +283,8 @@ First version (deliberately simpler than the TCC's full documented model): redis
 3. **Real DEM ingestion** *(done)* — `rasterio` + a hand-rolled priority-flood sink filler; downloaded/clipped a real SRTMGL1 tile (via OpenTopography) for a small Lajeado/Estrela test box, reprojected to a metric CRS with square pixels, sink-filled it, and ran the validated engine on real terrain (still no roughness-from-data or historical validation yet).
 4. **Real land-cover / roughness data** *(done)* — MapBiomas Collection 10 raster → Manning's n lookup table → real `N` matrix, replacing the synthetic uniform one `poc_real_dem.py` previously used.
 5. **Wrap in FastAPI** *(done)* — `POST /simulations` + `WS /simulations/{run_id}/stream`, serving the real Lajeado/Estrela grid with JSON numeric frames. Still no frontend — verified with `curl` + a `websockets` script.
-6. **React + Vite + Leaflet frontend** *(current step)* — config panel, live map overlay fed by the WebSocket stream, log/metrics panel (loosely following the Figure 12 mockup from the TCC).
-7. **Docker Compose** — containerize backend + frontend + static data volume.
+6. **React + Vite + Leaflet frontend** *(done)* — config panel, live map overlay fed by the WebSocket stream, log/metrics panel (loosely following the Figure 12 mockup from the TCC).
+7. **Docker Compose** *(current step)* — containerize backend + frontend + static data volume.
 8. **Validation against real events** — HWM and SWOT data for the 2023/2024 floods, CSI (spatial) and RMSE (depth) metrics, performance benchmarking (vectorized NumPy vs. loops, exploratory CuPy/GPU).
 
 Update the "Current status" section above as steps complete — this file is meant to be read at the start of future sessions instead of re-deriving the plan from scratch.
