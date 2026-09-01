@@ -13,6 +13,7 @@ import numpy as np
 
 Z: np.ndarray | None = None
 N: np.ndarray | None = None
+BOUNDS: tuple[float, float, float, float] | None = None
 
 
 def get_terrain() -> np.ndarray:
@@ -21,3 +22,7 @@ def get_terrain() -> np.ndarray:
 
 def get_roughness() -> np.ndarray:
     return N
+
+
+def get_bounds() -> tuple[float, float, float, float]:
+    return BOUNDS

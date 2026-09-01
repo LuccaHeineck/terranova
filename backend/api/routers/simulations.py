@@ -20,7 +20,7 @@ import numpy as np
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
-from api.state import get_roughness, get_terrain
+from api.state import get_bounds, get_roughness, get_terrain
 from simulation.engine import seed_pool_at_lowest_point, step
 
 router = APIRouter()
@@ -34,9 +34,17 @@ class SimulationParams(BaseModel):
     outflow_fraction: float = Field(default=0.5, gt=0, le=1)
 
 
+class Bounds(BaseModel):
+    west: float
+    south: float
+    east: float
+    north: float
+
+
 class SimulationCreated(BaseModel):
     run_id: str
     grid_shape: tuple[int, int]
+    bounds: Bounds
 
 
 _pending_runs: dict[str, SimulationParams] = {}
@@ -44,11 +52,18 @@ _pending_runs: dict[str, SimulationParams] = {}
 
 @router.post("/simulations", response_model=SimulationCreated)
 def create_simulation(
-    params: SimulationParams, Z: np.ndarray = Depends(get_terrain)
+    params: SimulationParams,
+    Z: np.ndarray = Depends(get_terrain),
+    bounds: tuple[float, float, float, float] = Depends(get_bounds),
 ) -> SimulationCreated:
     run_id = str(uuid.uuid4())
     _pending_runs[run_id] = params
-    return SimulationCreated(run_id=run_id, grid_shape=Z.shape)
+    west, south, east, north = bounds
+    return SimulationCreated(
+        run_id=run_id,
+        grid_shape=Z.shape,
+        bounds=Bounds(west=west, south=south, east=east, north=north),
+    )
 
 
 @router.websocket("/simulations/{run_id}/stream")
