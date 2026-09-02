@@ -180,20 +180,59 @@ grid built in steps 3–4:
   orange-red. Also verified the error path by force-killing the backend mid-stream: the UI
   correctly transitions to a visible "Stream closed unexpectedly (code 1006)" error state instead
   of hanging.
-- **Deferred, not done in this step**: Docker Compose wiring for `frontend/` (step 7 — the known
-  `data/`-volume-mount gap from step 5 is still unresolved for `backend` too); Vitest/RTL frontend
-  tests; CSI/RMSE validation UI (step 8); CORS-origin configurability beyond the hardcoded
-  localhost list.
+- **Deferred, not done in this step**: Docker Compose wiring for `frontend/` and the `data/`-volume-
+  mount gap for `backend` (both done in step 7 — see "Step 7 done" below); Vitest/RTL frontend
+  tests; CSI/RMSE validation UI (step 8); CORS-origin configurability beyond the hardcoded localhost
+  list (also done in step 7).
 
-Next up is **step 7**: Docker Compose (containerize backend + frontend + a shared data volume,
-and fix the known `data/`-mount gap from step 5 along the way).
+**Step 7 done.** `docker compose up --build` now brings up both services end-to-end:
+- **`frontend/Dockerfile`** (new): multi-stage build — `node:22-alpine` runs `npm ci` + `npm run
+  build`, then the built `dist/` is copied into an `nginx:alpine` stage that serves it as static
+  files on port 80 (published as host port 5173, matching the old dev-server port). No SPA-fallback
+  nginx config was needed — `App.tsx` has a single fixed layout, no client-side routing.
+  `VITE_API_BASE_URL` is passed as a build `ARG` (Vite inlines `import.meta.env.VITE_*` at `vite
+  build` time, so it can't be a runtime container env var); its default already matches the
+  backend's host-published port, so the common case needs no override.
+- **Fixed the `data/`-mount gap** (the known limitation from step 5/6): `backend/config/settings.py`
+  now derives `RAW_DIR`/`PROCESSED_DIR` from a `TERRANOVA_DATA_DIR` env var (defaulting to the old
+  bare-metal `REPO_ROOT/data` path when unset), and `docker-compose.yml` bind-mounts
+  `./data:/app/data` read-write with `TERRANOVA_DATA_DIR=/app/data` set on the `backend` service.
+  Read-write, not read-only, because the FastAPI `lifespan` unconditionally re-derives and
+  overwrites `data/processed/*.tif` on every startup — verified this actually happens inside the
+  container (host-side mtimes on `data/processed/*.tif` update on each `docker compose up`).
+  **Side effect worth knowing**: since the backend container runs as root (no `USER` directive) and
+  the mount is a host bind mount, the container's writes leave `data/processed/*.tif` root-owned on
+  the host afterwards. This self-heals the next time the backend runs bare-metal as `lucca` (it
+  overwrites the same files unconditionally), so it hasn't been treated as a bug worth adding a
+  non-root `USER`/UID-mapping for at this step — noted here in case a "permission denied" surprises
+  a future bare-metal run right after a Docker one.
+- **CORS origins are now configurable**: `CORS_ALLOWED_ORIGINS` env var (comma-separated), read in
+  `backend/config/settings.py` and used by `backend/api/main.py`; defaults to the same
+  `localhost:5173`/`127.0.0.1:5173` list as before, so bare-metal `uvicorn` behavior is unchanged.
+  `docker-compose.yml` sets it explicitly on the `backend` service for documentation purposes (the
+  value doesn't actually need to differ, since the frontend container is published on the same
+  `5173` host port the dev server used).
+- **`backend/.dockerignore`** now excludes `.env`, so the gitignored `OPENTOPOGRAPHY_API_KEY` secret
+  doesn't get baked into the image (it's only needed by the offline `scripts/download_*.py`, never
+  by the running FastAPI app).
+- **`backend/Dockerfile`** also needed one more fix, found while first bringing the containers up:
+  `python:3.12-slim` doesn't ship `libexpat.so.1`, which rasterio's manylinux wheel dynamically
+  links against — `apt-get install -y libexpat1` was added as a build step.
+- **Verified end-to-end**: `docker compose up --build` starts both containers; the backend's
+  lifespan loads the real Lajeado/Estrela DEM/land-cover from the mounted volume with no
+  `FileNotFoundError`; `curl http://localhost:8000/health` succeeds; the frontend serves at
+  `http://localhost:5173` with `VITE_API_BASE_URL` correctly baked into the bundle as
+  `http://localhost:8000`; a CORS preflight (`OPTIONS /simulations` with `Origin:
+  http://localhost:5173`) returns `access-control-allow-origin: http://localhost:5173`; a real
+  simulation run was created via `POST /simulations` and its `WS /simulations/{run_id}/stream`
+  delivered a real frame (`step`/`depth`/`volume` keys) over the container's published port; and
+  `docker compose down` followed by `docker compose up` (no `--build`) came back up cleanly against
+  the already-processed `data/processed/*.tif`, confirming the startup re-derivation is idempotent,
+  not just first-run-lucky.
 
-To run it: `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
+To run the CA-engine PoC directly (bare-metal, unrelated to Docker): `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 
-**Note (out of order):** at the user's explicit request, a minimal `backend/Dockerfile` and a
-root `docker-compose.yml` (single `backend` service, port 8000) were added ahead of schedule —
-normally step 7. The frontend service still isn't wired into it — `docker-compose.yml` remains
-backend-only for now, tracked as part of step 7.
+To run the full containerized stack: `docker compose up --build` from the repo root, then open `http://localhost:5173`.
 
 ## Structure so far
 
@@ -284,8 +323,8 @@ First version (deliberately simpler than the TCC's full documented model): redis
 4. **Real land-cover / roughness data** *(done)* — MapBiomas Collection 10 raster → Manning's n lookup table → real `N` matrix, replacing the synthetic uniform one `poc_real_dem.py` previously used.
 5. **Wrap in FastAPI** *(done)* — `POST /simulations` + `WS /simulations/{run_id}/stream`, serving the real Lajeado/Estrela grid with JSON numeric frames. Still no frontend — verified with `curl` + a `websockets` script.
 6. **React + Vite + Leaflet frontend** *(done)* — config panel, live map overlay fed by the WebSocket stream, log/metrics panel (loosely following the Figure 12 mockup from the TCC).
-7. **Docker Compose** *(current step)* — containerize backend + frontend + static data volume.
-8. **Validation against real events** — HWM and SWOT data for the 2023/2024 floods, CSI (spatial) and RMSE (depth) metrics, performance benchmarking (vectorized NumPy vs. loops, exploratory CuPy/GPU).
+7. **Docker Compose** *(done)* — containerize backend + frontend + static data volume.
+8. **Validation against real events** *(current step)* — HWM and SWOT data for the 2023/2024 floods, CSI (spatial) and RMSE (depth) metrics, performance benchmarking (vectorized NumPy vs. loops, exploratory CuPy/GPU).
 
 Update the "Current status" section above as steps complete — this file is meant to be read at the start of future sessions instead of re-deriving the plan from scratch.
 
