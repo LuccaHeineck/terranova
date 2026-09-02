@@ -14,8 +14,9 @@ load_dotenv()
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = BACKEND_DIR.parent
 
-RAW_DIR = REPO_ROOT / "data" / "raw"
-PROCESSED_DIR = REPO_ROOT / "data" / "processed"
+DATA_DIR = Path(os.environ.get("TERRANOVA_DATA_DIR", str(REPO_ROOT / "data")))
+RAW_DIR = DATA_DIR / "raw"
+PROCESSED_DIR = DATA_DIR / "processed"
 
 # Region of interest: a small ~6km test box straddling the Taquari river between
 # Lajeado and Estrela, RS. Deliberately small for a fast first real-DEM pass -
@@ -51,6 +52,10 @@ LANDCOVER_RAW_PATH = RAW_DIR / "lajeado_estrela_landcover.tif"
 LANDCOVER_PROCESSED_PATH = PROCESSED_DIR / "lajeado_estrela_n.tif"
 
 OPENTOPOGRAPHY_API_URL = "https://portal.opentopography.org/API/globaldem"
+
+CORS_ALLOWED_ORIGINS = os.environ.get(
+    "CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+).split(",")
 
 
 def get_opentopography_api_key() -> str:

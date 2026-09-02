@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api import state
 from api.routers import health, simulations
+from config.settings import CORS_ALLOWED_ORIGINS
 from ingestion.dem import build_elevation_matrix, get_geographic_bounds
 from ingestion.landcover import build_roughness_matrix
 
@@ -20,7 +21,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=CORS_ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
