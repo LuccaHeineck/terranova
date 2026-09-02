@@ -22,9 +22,20 @@ export function FloodMap({ bounds, frame }: FloodMapProps) {
     if (!containerRef.current || mapRef.current) return
 
     const map = L.map(containerRef.current).setView(DEFAULT_CENTER, DEFAULT_ZOOM)
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; OpenStreetMap contributors',
-    }).addTo(map)
+    // Dark, low-saturation basemap: recedes behind the flood overlay instead of
+    // competing with it, unlike stock OSM's busy colored roads/labels. Esri's Dark
+    // Gray Canvas is built for exactly this (data overlay backdrop) and needs no API key.
+    L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+      {
+        attribution: '&copy; Esri &mdash; Esri, DeLorme, NAVTEQ',
+        maxZoom: 16,
+      },
+    ).addTo(map)
+    L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}',
+      { maxZoom: 16 },
+    ).addTo(map)
     mapRef.current = map
 
     return () => {
