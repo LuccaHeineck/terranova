@@ -2,3 +2,4 @@
 __pycache__/
 *.pyc
 poc_grid_result.png
+.env
