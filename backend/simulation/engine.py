@@ -4,8 +4,11 @@ Each cell holds a static terrain elevation (Z), a dynamic water depth (H),
 and a static Manning roughness coefficient (N). `step` advances H by one
 discrete iteration: water moves from each cell to its 8 Moore neighbors,
 weighted by slope and by the roughness of the neighbor being flowed into,
-never uphill, and mass is conserved exactly (nothing enters or leaves the
-grid).
+never uphill. The grid is closed by default (nothing enters or leaves,
+mass conserved exactly) but can be made an open system via `step`'s
+optional `inflow` source term (e.g. boundary inflow standing in for
+upstream river discharge), in which case volume grows by exactly the
+injected amount each step instead of staying constant.
 
 This module has no I/O and no geodata dependency on purpose - it operates
 on plain NumPy arrays so it can be validated on small synthetic grids
@@ -75,7 +78,13 @@ def _single_update(Zp: np.ndarray, Np: np.ndarray, H: np.ndarray, outflow_fracti
     return H - total_outflow + inflow[1:-1, 1:-1]
 
 
-def step(Z: np.ndarray, H: np.ndarray, N: np.ndarray, outflow_fraction: float = 0.5) -> np.ndarray:
+def step(
+    Z: np.ndarray,
+    H: np.ndarray,
+    N: np.ndarray,
+    outflow_fraction: float = 0.5,
+    inflow: np.ndarray | None = None,
+) -> np.ndarray:
     """Advance the water depth grid H by one discrete time step.
 
     For each cell, water surface elevation is `Z + H`. Over the step, the
@@ -92,11 +101,25 @@ def step(Z: np.ndarray, H: np.ndarray, N: np.ndarray, outflow_fraction: float = 
 
     Roughness only steers *where* the capped outflow goes, not *how much*
     leaves the cell - see `docs/project-plan.md`'s step 2 notes for why.
+
+    The grid is closed (no rain/infiltration) by default. `inflow`, if
+    given, is a per-cell external source term (e.g. a boundary inflow
+    standing in for upstream river discharge) added to H once after the
+    redistribution above - newly-arrived water starts redistributing on the
+    *next* step rather than mid-step, an explicit simplification of the same
+    kind as the substep decomposition. With `inflow`, total volume is no
+    longer conserved outright: it grows by exactly `inflow.sum()` per step,
+    which is still exactly checkable rather than merely approximate.
     """
     if not (0 < outflow_fraction <= 1):
         raise ValueError("outflow_fraction must be in (0, 1]")
     if np.any(N <= 0):
         raise ValueError("N (Manning roughness) must be strictly positive everywhere")
+    if inflow is not None:
+        if inflow.shape != H.shape:
+            raise ValueError("inflow must have the same shape as H")
+        if np.any(inflow < 0):
+            raise ValueError("inflow must be non-negative everywhere")
 
     n_substeps = math.ceil(outflow_fraction / _MAX_STABLE_SUBSTEP_FRACTION)
     # Per-substep fraction chosen so that n_substeps of sequential depletion
@@ -111,6 +134,8 @@ def step(Z: np.ndarray, H: np.ndarray, N: np.ndarray, outflow_fraction: float = 
     Np = np.pad(N, 1, mode="constant", constant_values=1.0)
     for _ in range(n_substeps):
         H = _single_update(Zp, Np, H, substep_fraction)
+    if inflow is not None:
+        H = H + inflow
     return H
 
 
