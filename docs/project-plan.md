@@ -242,12 +242,20 @@ not just approximate. Deliberately general (a per-cell array, not "boundary"-spe
 mechanism can serve rain input too, if that's added later. Validated on synthetic grids only, per the
 project's incremental philosophy (same pattern step 2's Manning weighting followed) — see the new
 `test_inflow_*` tests in `backend/tests/test_engine.py` and the second (open-system) scenario added to
-`backend/examples/poc_grid.py`. Explicitly **not** done here: deriving a real `dt` (still no
-elapsed-time mapping, only a real cell size from step 3) or wiring an actual hydrograph — both
-deferred to step 8, where a real, directly-usable driving signal was found: ANA/SGB gauge station
-`86879300` at Porto Fluvial de Estrela (inside this project's own 6 km ROI) recorded 15-minute river
-level throughout the May 2024 event (peak 33.66 m), downloadable via ANA's Hidroweb API; SGB/CPRM
-also already published flood-extent shapefiles indexed by stage (19–36 m) as a CSI comparison target.
+`backend/examples/poc_grid.py`.
+
+**Important scope note, caught in review**: this is an engine-level capability only. `inflow` is not
+referenced anywhere in `backend/api/` or `frontend/src/` — `POST /simulations` and the WebSocket
+streaming loop still call `step()` with no `inflow` argument. Running the actual app (API + frontend)
+today behaves identically to before this change; there is no way for a user to trigger an open-system
+run yet. Wiring `inflow` through the API/frontend is folded into step 9 below, alongside the real
+driving hydrograph, rather than done as a separate throwaway manual-control step — deriving a real
+`dt` (still no elapsed-time mapping, only a real cell size from step 3) is also needed first (step 8)
+for the hydrograph's 15-minute cadence to mean anything in simulation steps. The real, directly-usable
+driving signal for step 9 was already found: ANA/SGB gauge station `86879300` at Porto Fluvial de
+Estrela (inside this project's own 6 km ROI) recorded 15-minute river level throughout the May 2024
+event (peak 33.66 m), downloadable via ANA's Hidroweb API; SGB/CPRM also already published
+flood-extent shapefiles indexed by stage (19–36 m), used in step 10 as the CSI comparison target.
 
 To run the CA-engine PoC directly (bare-metal, unrelated to Docker): `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 
@@ -343,7 +351,10 @@ First version (deliberately simpler than the TCC's full documented model): redis
 5. **Wrap in FastAPI** *(done)* — `POST /simulations` + `WS /simulations/{run_id}/stream`, serving the real Lajeado/Estrela grid with JSON numeric frames. Still no frontend — verified with `curl` + a `websockets` script.
 6. **React + Vite + Leaflet frontend** *(done)* — config panel, live map overlay fed by the WebSocket stream, log/metrics panel (loosely following the Figure 12 mockup from the TCC).
 7. **Docker Compose** *(done)* — containerize backend + frontend + static data volume.
-8. **Validation against real events** *(current step)* — HWM and SWOT data for the 2023/2024 floods, CSI (spatial) and RMSE (depth) metrics, performance benchmarking (vectorized NumPy vs. loops, exploratory CuPy/GPU).
+8. **Real timestep (`dt`) derivation** *(current step)* — the engine still only knows abstract step counts; derive a real `dt` from Manning flow velocities under a CFL-style stability condition (standard technique in 2D flood CA literature), using the real `dx = 30m` cell size already established in step 3. Without this, step 9's 15-minute gauge readings have no meaningful mapping onto simulation steps.
+9. **Real driving hydrograph, wired end-to-end** — download the ANA/SGB gauge station `86879300` (Porto Fluvial de Estrela) 15-minute river-level record for the May 2024 event via the Hidroweb API, convert it into a time-varying `inflow` series using step 8's `dt`, and — unlike the engine-only `inflow` capability added ahead of schedule (see "Current status" above) — actually thread it through: `POST /simulations`/the WebSocket streaming loop in `backend/api/routers/simulations.py`, and the frontend (`ConfigPanel`/`LogPanel` need to reflect an open-system run, since volume will grow instead of staying flat). Only once this step is done can a user run a real, gauge-driven event through the actual app, not just through a Python script.
+10. **CSI/RMSE validation against real events** — ingest SGB/CPRM's stage-indexed flood-extent shapefiles (and HWM/SWOT ground truth where available) for the 2023/2024 events, and implement CSI (spatial overlap between simulated and observed flooded extent) and RMSE (depth, where ground-truth depth exists) in the already-scaffolded `validation/` module.
+11. **Performance benchmarking** — vectorized NumPy vs. loop-based comparison, exploratory CuPy/GPU, run against the real event replay from steps 9–10.
 
 Update the "Current status" section above as steps complete — this file is meant to be read at the start of future sessions instead of re-deriving the plan from scratch.
 
@@ -352,7 +363,7 @@ Update the "Current status" section above as steps complete — this file is mea
 Raised in session while trying out the step-6 frontend and discussing what would make the demo feel
 like an actual usable flood simulator rather than just validated mechanics. Unlike the numbered
 roadmap above (sequential, each step a prerequisite for the next), these are independent candidate
-enhancements — not committed to, not ordered, and not required for steps 7-8. Grouped by how much
+enhancements — not committed to, not ordered, and not required for steps 7-11. Grouped by how much
 they'd cost and whether they touch the TCC's documented model:
 
 **Cheap — UI/plumbing only, no engine or model changes:**
@@ -380,12 +391,11 @@ they'd cost and whether they touch the TCC's documented model:
   validated invariant from "total volume constant" to "final volume = initial + cumulative rain
   input" (still checkable, just a different one), and changes what the thesis is claiming to model.
   Should be a deliberate choice, not a quiet addition — flagged as worth discussing with an advisor.
-- **Real elapsed time (minutes/hours) instead of abstract step counts**: there's currently no real
-  timestep (`dt`) anywhere, only a real cell size (`dx = 30m`, from step 3). Needs deriving `dt` from
-  Manning flow velocities under a CFL-style stability condition — standard technique in 2D flood CA
-  literature, but new work, not a config toggle. Most meaningful paired with a real driving input
-  (rain, or the boundary inflow added below) — a one-time closed-system redistribution doesn't have
-  a strong "when does the water arrive" story on its own.
-- Together with step 8 (validation against the real 2023/2024 events), these would be what actually
-  makes results feel like "a real simulation" rather than validated mechanics on arbitrary units and
-  an arbitrary seed volume. **Boundary inflow itself is done — see "Current status" above.**
+- ~~Real elapsed time (minutes/hours) instead of abstract step counts~~ — **promoted out of this
+  backlog into the numbered roadmap as step 8** (needed as a prerequisite for step 9's real
+  hydrograph, not just a nice-to-have), see the roadmap above.
+- Rain input remains the one item here still touching the TCC's documented base model and needing an
+  advisor conversation; it is deliberately **not** folded into steps 8-11, which use boundary inflow
+  (already engine-side, being wired end-to-end in step 9) as the real event's driving input instead.
+- **Boundary inflow itself exists in the engine (`step()`'s `inflow` parameter) but is not reachable
+  through the API or frontend yet — that end-to-end wiring is step 9 above, not a "future feature."**
