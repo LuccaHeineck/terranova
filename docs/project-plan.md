@@ -230,6 +230,25 @@ grid built in steps 3–4:
   the already-processed `data/processed/*.tif`, confirming the startup re-derivation is idempotent,
   not just first-run-lucky.
 
+**Boundary inflow added (ahead of step 8, deliberately out of numbered order).** Investigating how
+step 8 validation would actually work surfaced a real gap: the engine was a strictly closed system
+(one seeded pool at t=0), but a real event like May 2024 is driven by the river rising continuously
+over ~72 hours — no closed-system run can represent that. `step()` (`backend/simulation/engine.py`)
+now takes an optional `inflow` parameter: a per-cell external source array added to `H` once after
+each step's redistribution pass (not split across substeps — a documented simplification, the same
+kind of engineering choice `_MAX_STABLE_SUBSTEP_FRACTION` already is). With `inflow`, the conserved
+quantity becomes `final volume == initial + cumulative injected volume`, still exactly checkable,
+not just approximate. Deliberately general (a per-cell array, not "boundary"-specific) so the same
+mechanism can serve rain input too, if that's added later. Validated on synthetic grids only, per the
+project's incremental philosophy (same pattern step 2's Manning weighting followed) — see the new
+`test_inflow_*` tests in `backend/tests/test_engine.py` and the second (open-system) scenario added to
+`backend/examples/poc_grid.py`. Explicitly **not** done here: deriving a real `dt` (still no
+elapsed-time mapping, only a real cell size from step 3) or wiring an actual hydrograph — both
+deferred to step 8, where a real, directly-usable driving signal was found: ANA/SGB gauge station
+`86879300` at Porto Fluvial de Estrela (inside this project's own 6 km ROI) recorded 15-minute river
+level throughout the May 2024 event (peak 33.66 m), downloadable via ANA's Hidroweb API; SGB/CPRM
+also already published flood-extent shapefiles indexed by stage (19–36 m) as a CSI comparison target.
+
 To run the CA-engine PoC directly (bare-metal, unrelated to Docker): `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 
 To run the full containerized stack: `docker compose up --build` from the repo root, then open `http://localhost:5173`.
@@ -361,17 +380,12 @@ they'd cost and whether they touch the TCC's documented model:
   validated invariant from "total volume constant" to "final volume = initial + cumulative rain
   input" (still checkable, just a different one), and changes what the thesis is claiming to model.
   Should be a deliberate choice, not a quiet addition — flagged as worth discussing with an advisor.
-- **Initial river stage / boundary inflow**: a different kind of input than a one-time seed pool —
-  water entering continuously from one edge of the grid (e.g. simulating upstream discharge). The
-  engine currently has no notion of an open boundary at all, only closed walls (`+inf`/`0` padding
-  is what makes exact mass conservation testable in the first place) — this is a bigger structural
-  change, same "open system, new scope decision" category as rain.
 - **Real elapsed time (minutes/hours) instead of abstract step counts**: there's currently no real
   timestep (`dt`) anywhere, only a real cell size (`dx = 30m`, from step 3). Needs deriving `dt` from
   Manning flow velocities under a CFL-style stability condition — standard technique in 2D flood CA
   literature, but new work, not a config toggle. Most meaningful paired with a real driving input
-  (rain or boundary inflow above) — a one-time closed-system redistribution doesn't have a strong
-  "when does the water arrive" story on its own.
-- Together with step 8 (validation against the real 2023/2024 events), these three would be what
-  actually makes results feel like "a real simulation" rather than validated mechanics on arbitrary
-  units and an arbitrary seed volume.
+  (rain, or the boundary inflow added below) — a one-time closed-system redistribution doesn't have
+  a strong "when does the water arrive" story on its own.
+- Together with step 8 (validation against the real 2023/2024 events), these would be what actually
+  makes results feel like "a real simulation" rather than validated mechanics on arbitrary units and
+  an arbitrary seed volume. **Boundary inflow itself is done — see "Current status" above.**

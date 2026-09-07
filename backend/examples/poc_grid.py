@@ -5,8 +5,11 @@ water should pool) and a synthetic Manning roughness field (a smoother
 diagonal "channel" through a rougher background), drops a concentrated pool
 of water at the basin, runs the engine for a fixed number of closed-system
 steps (no rain, no infiltration), and checks that mass is conserved and
-depth never goes negative. Saves a plot of terrain/roughness/depth snapshots
-over time for a quick visual sanity check.
+depth never goes negative. Also runs a second, open-system scenario on the
+same terrain, fed by a continuous boundary inflow at one edge cell instead
+of a one-time seed pool, checking that volume grows by exactly the injected
+amount each step. Saves a plot of terrain/roughness/depth snapshots over
+time for a quick visual sanity check.
 
 Run from the backend/ directory with the venv active:
     python -m scripts.poc_grid
@@ -22,6 +25,7 @@ from simulation.engine import step
 GRID_SIZE = 50
 STEPS = 100
 SEED_VOLUME = 400.0
+INFLOW_RATE = 2.0
 OUTPUT_PATH = "poc_grid_result.png"
 SNAPSHOT_STEPS = (0, 5, 10, 15, 50)
 
@@ -89,7 +93,22 @@ def main() -> None:
     print(f"total volume (conservation check): {H.sum():.4f} (initial: {initial_volume:.4f})")
     print(f"execution time: {elapsed:.4f} s")
 
-    n_panels = 2 + len(SNAPSHOT_STEPS)
+    # Second scenario: an open system, continuously fed by a boundary inflow
+    # at one edge cell instead of a one-time seed pool - demonstrates `step`'s
+    # `inflow` source term (see engine.py) on the same synthetic terrain.
+    H_open = np.zeros((GRID_SIZE, GRID_SIZE))
+    inflow = np.zeros((GRID_SIZE, GRID_SIZE))
+    inflow[0, GRID_SIZE // 2] = INFLOW_RATE
+    for t in range(1, STEPS + 1):
+        H_open = step(Z, H_open, N, inflow=inflow)
+        assert H_open.min() >= -1e-9, f"negative depth at open-system step {t}: {H_open.min()}"
+        expected_volume = t * INFLOW_RATE
+        assert abs(H_open.sum() - expected_volume) < 1e-6, (
+            f"open-system volume mismatch at step {t}: {H_open.sum()} vs {expected_volume}"
+        )
+    print(f"boundary-inflow scenario total volume after {STEPS} steps: {H_open.sum():.4f}")
+
+    n_panels = 3 + len(SNAPSHOT_STEPS)
     fig, axes = plt.subplots(1, n_panels, figsize=(5 * n_panels, 5))
     axes[0].imshow(Z, cmap="terrain")
     axes[0].set_title("Terrain")
@@ -98,6 +117,8 @@ def main() -> None:
     for ax, t in zip(axes[2:], SNAPSHOT_STEPS):
         ax.imshow(snapshots[t], cmap="Blues", vmin=0, vmax=H.max())
         ax.set_title(f"Water depth (t = {t})")
+    axes[-1].imshow(H_open, cmap="Blues", vmin=0, vmax=H_open.max())
+    axes[-1].set_title(f"Boundary inflow (t = {STEPS})")
     for ax in axes:
         ax.set_xticks([])
         ax.set_yticks([])

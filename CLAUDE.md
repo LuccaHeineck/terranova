@@ -77,12 +77,17 @@ Core model, per the TCC's transition rule (`docs/tcc-summary.md` has the full eq
   avoiding geometric distortion.
 - Mass conservation is the primary correctness check throughout the project: total volume in a closed
   system (no rain/infiltration) must stay constant to numerical precision across arbitrarily many steps.
+  `step()` also accepts an optional `inflow` source term (a per-cell array added to `H` once per step,
+  e.g. a boundary inflow standing in for upstream river discharge) that makes the grid an open system —
+  in that case the checkable invariant becomes `final volume == initial + cumulative inflow`, still
+  exact, not approximate.
 - The current engine caps each cell's release at `outflow_fraction` of its depth per step — this is an
   engineering stability choice for the explicit scheme (keeps `H` from going negative), not part of the
-  TCC's documented equation. Manning roughness weighting (`Q_i = (1/n_i) * h_i^(5/3) * sqrt(S_i)`) is not
-  yet implemented — that's roadmap step 2.
-- Grid boundaries are treated as walls (padded with `+inf`/`0`), making the domain a closed system by
-  construction — this is why exact mass conservation is testable rather than approximate.
+  TCC's documented equation. Manning roughness weighting (`Q_i = (1/n_i) * h_i^(5/3) * sqrt(S_i)`) is
+  implemented, weighting outflow direction by `sqrt(slope) / n` (roadmap step 2).
+- Grid boundaries are treated as walls (padded with `+inf`/`0`); combined with the closed-by-default
+  system above, this is why exact mass conservation (or exact conservation-plus-inflow) is testable
+  rather than approximate.
 
 Planned full architecture (not yet built beyond the engine + PoC — see roadmap above for when each part
 gets added): a Python backend loads preprocessed static rasters from disk (no DB/external calls during

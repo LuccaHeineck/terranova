@@ -101,6 +101,72 @@ def test_no_checkerboard_artifact_with_varying_roughness():
     assert roughness < 0.05, f"speckle artifact detected: roughness={roughness:.5f}"
 
 
+def test_inflow_adds_exact_volume_and_stays_nonnegative():
+    """An open system (constant per-step inflow at one cell): total volume
+    must grow by exactly the injected amount each step, and depth must still
+    never go negative."""
+    rows, cols = 10, 10
+    Z = np.zeros((rows, cols))
+    N = np.full((rows, cols), 0.05)
+    H = np.zeros((rows, cols))
+
+    inflow = np.zeros((rows, cols))
+    inflow[0, 3] = 2.0  # off-center edge cell
+
+    initial_volume = H.sum()
+    for t in range(1, 21):
+        H = step(Z, H, N, inflow=inflow)
+        assert H.min() >= -1e-9, f"negative depth at step {t}: {H.min()}"
+        expected = initial_volume + t * inflow.sum()
+        assert H.sum() == pytest.approx(expected), (
+            f"volume mismatch at step {t}: {H.sum()} vs {expected}"
+        )
+
+
+def test_step_rejects_mismatched_inflow_shape():
+    rows, cols = 5, 5
+    Z = np.zeros((rows, cols))
+    H = np.zeros((rows, cols))
+    N = np.full((rows, cols), 0.05)
+    inflow = np.zeros((rows + 1, cols))
+
+    with pytest.raises(ValueError):
+        step(Z, H, N, inflow=inflow)
+
+
+def test_step_rejects_negative_inflow():
+    rows, cols = 5, 5
+    Z = np.zeros((rows, cols))
+    H = np.zeros((rows, cols))
+    N = np.full((rows, cols), 0.05)
+    inflow = np.zeros((rows, cols))
+    inflow[2, 2] = -1.0
+
+    with pytest.raises(ValueError):
+        step(Z, H, N, inflow=inflow)
+
+
+def test_inflow_propagates_downhill_from_injection_point():
+    """Water injected at an edge cell on sloped terrain should spread to its
+    downhill neighbor over subsequent steps, not stay stuck at the
+    injection point."""
+    rows, cols = 5, 5
+    Z = np.zeros((rows, cols))
+    Z[0, :] = 10.0  # top row is high ground
+    for r in range(1, rows):
+        Z[r, :] = 10.0 - r  # slopes down away from the top edge
+
+    N = np.full((rows, cols), 0.05)
+    H = np.zeros((rows, cols))
+    inflow = np.zeros((rows, cols))
+    inflow[0, 2] = 5.0
+
+    for _ in range(5):
+        H = step(Z, H, N, inflow=inflow)
+
+    assert H[1, 2] > 0.0, "water should have spread downhill from the injection point"
+
+
 def test_seed_pool_at_lowest_point_seeds_full_volume_at_the_minimum():
     rows, cols = 10, 10
     Z = np.full((rows, cols), 10.0)
