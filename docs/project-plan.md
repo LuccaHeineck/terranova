@@ -257,6 +257,68 @@ Estrela (inside this project's own 6 km ROI) recorded 15-minute river level thro
 event (peak 33.66 m), downloadable via ANA's Hidroweb API; SGB/CPRM also already published
 flood-extent shapefiles indexed by stage (19–36 m), used in step 10 as the CSI comparison target.
 
+**Step 8 done.** The engine now has a way to derive a real elapsed timestep from Manning flow
+velocities under a CFL-style stability condition, using the real `dx = 30 m` cell size established
+in step 3 — closing the gap step 5/6/7's "boundary inflow" note flagged above ("still no
+elapsed-time mapping, only a real cell size from step 3").
+- **`compute_stable_dt(Z, H, N, dx, courant_number=1.0)`** (new function in
+  `backend/simulation/engine.py`, dependency-free like `step()` — `dx` is passed in by the caller,
+  never imported from `config/`): for each cell, estimates Manning overland-flow velocity via the
+  standard wide-channel simplification (hydraulic radius `R ≈ h`), `v = (1/n) * h^(2/3) * sqrt(S)`
+  (SI form, coefficient 1, not the US customary 1.49 — everything here is metric), where `S` is the
+  cell's steepest real downhill slope over its 8 Moore neighbors, `S = drop / (distance_cells * dx)`
+  — `drop` is a water-surface-elevation (`WSE = Z + H`) difference, matching `_single_update`'s own
+  head-driven convention, not bare terrain elevation. Takes `v_max` across the whole grid and returns
+  `dt = courant_number * dx / v_max` (the textbook CFL bound, `courant_number` as an optional safety
+  margin, default `1.0`).
+- **Deliberate deviation, documented in the function's docstring**: unlike `_single_update`'s
+  direction-weighting (which uses the *destination neighbor's* `N`, an arbitrary documented modeling
+  choice for that unrelated purpose), `compute_stable_dt` uses the *source cell's own* `H` and `N`
+  for the velocity magnitude — a physical quantity that must have `n` and `h` co-located at the same
+  cell, not mixed across cells. A future reader should not try to reconcile the two conventions; they
+  answer different questions.
+- **Adaptive, not a one-time constant**: `dt` is recomputed fresh from whatever `H` currently is on
+  every call, not cached — real flow velocity (and thus the physically meaningful `dt`) changes
+  throughout an event as depths rise and fall. A caller builds a real elapsed-time timeline by calling
+  this once per simulation step and accumulating `elapsed_time += dt`. This matches
+  `docs/tcc-summary.md`'s framing: Jahanbazi & Egger 2017's *adaptive-beyond-CFL* timestep is
+  explicitly deprioritized as future work in this project, so a literal, recomputed CFL bound is
+  exactly what's in scope here — not a fixed value, and not going further than CFL either.
+- **Exact derived property, not just an empirical trend**: holding `Z`/`H`/`N` fixed, slope `S` is
+  inversely proportional to `dx`, so velocity `v ∝ dx^(-1/2)`, making `dt ∝ dx^(3/2)` — a clean
+  algebraic identity, verified directly in `test_compute_stable_dt_scales_as_dx_to_the_three_halves`.
+- **Zero-velocity fallback**: a dry grid, or water present but the surface perfectly flat, makes
+  `v_max == 0` (would divide by zero). Falls back to a private module-level constant,
+  `_NO_FLOW_FALLBACK_DT_SECONDS = 3600.0` — a finite sentinel, not `math.inf`, since a caller
+  accumulating `elapsed_time += dt` needs a usable number, not a poison value, the moment it's hit.
+- **Known limitation, flagged for step 9/10 to revisit**: `compute_stable_dt` is fully decoupled from
+  `step()`'s `outflow_fraction`/substep decomposition — that machinery is a separate, already-solved
+  numerical-stability hack for the synchronous Jacobi update. Nothing yet enforces that the depth
+  fraction `step()` actually releases per call is consistent with the real-world `dt` just computed
+  for that call. Also, `courant_number=1.0`'s theoretical-edge default is not empirically
+  stress-tested in this step (unlike `_MAX_STABLE_SUBSTEP_FRACTION`, which *was* tuned after observing
+  real speckling) — revisit once step 9 depends on it for something consequential.
+- **`backend/tests/test_engine.py`** (9 new tests): a hand-derived value check (independently computed
+  via the textbook Manning/CFL formulas, not by calling the function's own internals) proving the
+  formula is wired correctly end-to-end; `dt` shrinks as slope steepens and as depth increases (two
+  independent physical drivers, tested separately); the exact `dx^(3/2)` scaling identity; linear
+  scaling with `courant_number`; the zero-velocity fallback (both a fully dry grid and a flat-WSE-
+  with-water-present case); and input validation (`dx`, `courant_number`, `N`) mirroring `step()`'s
+  existing style. Full suite: 35/35 passing (26 from steps 1–7 + 9 new).
+- **`backend/examples/poc_real_dem.py`** now calls `compute_stable_dt` once per step (using
+  `config.settings.TARGET_RESOLUTION_METERS = 30.0` as the real `dx`), accumulates elapsed real time,
+  and prints it alongside the existing mass-conservation checks. Observed on the real 183×192
+  Lajeado/Estrela grid: `dt` ranged 0.22s–18.23s across the 100-step closed-pool run (shorter while the
+  pool is actively draining down the steep river channel, longer as it settles), totalling ~17.2
+  simulated minutes — mass conservation unaffected (`400.0000` in/out, unchanged from step 3/4).
+  `backend/examples/poc_grid.py` (synthetic, arbitrary units) is deliberately untouched — the roadmap
+  text calls for demonstrating this with the *real* `dx = 30 m`, which only exists in the real-DEM
+  script; attaching a fake `dx` to the synthetic PoC would blur the "arbitrary units, no real geodata"
+  boundary that script has maintained since step 1.
+- No changes to `backend/api/` or `frontend/src/` — wiring a real hydrograph through the API/WebSocket/
+  UI is step 9's job, not this one; `POST /simulations` and the WebSocket streaming loop still call
+  `step()` with no `dt`/`inflow` argument, exactly as before this step.
+
 To run the CA-engine PoC directly (bare-metal, unrelated to Docker): `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 
 To run the full containerized stack: `docker compose up --build` from the repo root, then open `http://localhost:5173`.
@@ -351,8 +413,8 @@ First version (deliberately simpler than the TCC's full documented model): redis
 5. **Wrap in FastAPI** *(done)* — `POST /simulations` + `WS /simulations/{run_id}/stream`, serving the real Lajeado/Estrela grid with JSON numeric frames. Still no frontend — verified with `curl` + a `websockets` script.
 6. **React + Vite + Leaflet frontend** *(done)* — config panel, live map overlay fed by the WebSocket stream, log/metrics panel (loosely following the Figure 12 mockup from the TCC).
 7. **Docker Compose** *(done)* — containerize backend + frontend + static data volume.
-8. **Real timestep (`dt`) derivation** *(current step)* — the engine still only knows abstract step counts; derive a real `dt` from Manning flow velocities under a CFL-style stability condition (standard technique in 2D flood CA literature), using the real `dx = 30m` cell size already established in step 3. Without this, step 9's 15-minute gauge readings have no meaningful mapping onto simulation steps.
-9. **Real driving hydrograph, wired end-to-end** — download the ANA/SGB gauge station `86879300` (Porto Fluvial de Estrela) 15-minute river-level record for the May 2024 event via the Hidroweb API, convert it into a time-varying `inflow` series using step 8's `dt`, and — unlike the engine-only `inflow` capability added ahead of schedule (see "Current status" above) — actually thread it through: `POST /simulations`/the WebSocket streaming loop in `backend/api/routers/simulations.py`, and the frontend (`ConfigPanel`/`LogPanel` need to reflect an open-system run, since volume will grow instead of staying flat). Only once this step is done can a user run a real, gauge-driven event through the actual app, not just through a Python script.
+8. **Real timestep (`dt`) derivation** *(done)* — `compute_stable_dt` derives a real `dt` from Manning flow velocities under a CFL-style stability condition, using the real `dx = 30m` cell size already established in step 3. See "Step 8 done" above for the full design (source-cell velocity convention, adaptive recomputation, the `dt ∝ dx^(3/2)` identity, and the zero-velocity fallback).
+9. **Real driving hydrograph, wired end-to-end** *(current step)* — download the ANA/SGB gauge station `86879300` (Porto Fluvial de Estrela) 15-minute river-level record for the May 2024 event via the Hidroweb API, convert it into a time-varying `inflow` series using step 8's `dt`, and — unlike the engine-only `inflow` capability added ahead of schedule (see "Current status" above) — actually thread it through: `POST /simulations`/the WebSocket streaming loop in `backend/api/routers/simulations.py`, and the frontend (`ConfigPanel`/`LogPanel` need to reflect an open-system run, since volume will grow instead of staying flat). Only once this step is done can a user run a real, gauge-driven event through the actual app, not just through a Python script.
 10. **CSI/RMSE validation against real events** — ingest SGB/CPRM's stage-indexed flood-extent shapefiles (and HWM/SWOT ground truth where available) for the 2023/2024 events, and implement CSI (spatial overlap between simulated and observed flooded extent) and RMSE (depth, where ground-truth depth exists) in the already-scaffolded `validation/` module.
 11. **Performance benchmarking** — vectorized NumPy vs. loop-based comparison, exploratory CuPy/GPU, run against the real event replay from steps 9–10.
 

@@ -28,7 +28,7 @@ import numpy as np
 from config import settings
 from ingestion.dem import build_elevation_matrix
 from ingestion.landcover import build_roughness_matrix
-from simulation.engine import seed_pool_at_lowest_point, step
+from simulation.engine import compute_stable_dt, seed_pool_at_lowest_point, step
 
 STEPS = 100
 SEED_VOLUME = 400.0
@@ -58,15 +58,22 @@ def main() -> None:
     if 0 in SNAPSHOT_STEPS:
         snapshots[0] = H.copy()
 
+    elapsed_time = 0.0
+    dt_values = []
+
     start = time.perf_counter()
     for t in range(1, STEPS + 1):
+        dt = compute_stable_dt(Z, H, N, dx=settings.TARGET_RESOLUTION_METERS)
         H = step(Z, H, N)
+        elapsed_time += dt
+        dt_values.append(dt)
         assert H.min() >= -1e-9, f"negative depth at step {t}: {H.min()}"
         assert abs(H.sum() - initial_volume) < 1e-6, (
             f"volume drifted at step {t}: {H.sum()} vs {initial_volume}"
         )
         if t in SNAPSHOT_STEPS:
             snapshots[t] = H.copy()
+            print(f"step {t}: dt={dt:.2f}s, elapsed={elapsed_time / 60:.1f} min")
     elapsed = time.perf_counter() - start
 
     flooded = H > 1e-6
@@ -75,6 +82,8 @@ def main() -> None:
     print(f"flooded cells: {flooded.sum()}")
     print(f"average depth over flooded cells: {H[flooded].mean():.4f}")
     print(f"total volume (conservation check): {H.sum():.4f} (initial: {initial_volume:.4f})")
+    print(f"total simulated elapsed time: {elapsed_time / 60:.1f} min over {STEPS} discrete steps")
+    print(f"dt range across run: {min(dt_values):.2f}s - {max(dt_values):.2f}s")
     print(f"execution time: {elapsed:.4f} s")
 
     n_panels = 1 + len(SNAPSHOT_STEPS)

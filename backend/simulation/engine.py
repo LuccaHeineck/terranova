@@ -139,6 +139,92 @@ def step(
     return H
 
 
+# No downhill velocity anywhere (dry grid, or perfectly flat/still water) means the
+# Manning-derived CFL bound is vacuous (v_max == 0 would divide by zero). Falls back to
+# a fixed, documented sentinel rather than math.inf, which would poison any caller
+# accumulating elapsed real time (`elapsed_time += dt`) the moment it's hit.
+_NO_FLOW_FALLBACK_DT_SECONDS = 3600.0
+
+
+def compute_stable_dt(
+    Z: np.ndarray,
+    H: np.ndarray,
+    N: np.ndarray,
+    dx: float,
+    courant_number: float = 1.0,
+) -> float:
+    """Derive the real elapsed time (in seconds) that one `step()` call should be
+    considered to represent, from the current water depth `H`, under a CFL-style
+    stability condition: `dt <= courant_number * dx / v_max`, where `v_max` is the
+    fastest Manning overland-flow velocity anywhere on the grid right now.
+
+    Units: `dx`, `Z`, `H` in meters; `N` dimensionless Manning's n; return value in
+    seconds. `dx` must be the real physical cell size (e.g.
+    `config.settings.TARGET_RESOLUTION_METERS`) - this function has no way to detect
+    a wrong unit, it will just silently produce a physically meaningless `dt`.
+
+    Velocity is estimated per cell via the standard wide-channel/overland-flow
+    simplification (hydraulic radius R ~= depth h), using the SI form of Manning's
+    equation (coefficient 1, not the US customary 1.49, since everything here is
+    metric): `v = (1/n) * h^(2/3) * sqrt(S)`, where `S` is the cell's steepest real
+    downhill slope (`drop / (distance_cells * dx)`, over the 8 Moore neighbors).
+    `drop` is a water-surface-elevation (`WSE = Z + H`) difference, matching
+    `_single_update`'s own head-driven convention, not bare terrain elevation - a
+    cell already carrying deep water has a shallower effective WSE drop to a dry
+    neighbor than its bare terrain slope alone would suggest.
+
+    Deliberate deviation from `_single_update`'s convention: both `n` and `h` here
+    are the *source* cell's own values, not a destination neighbor's. That's a
+    different quantity than `_single_update`'s direction-weighting (which uses the
+    destination neighbor's `n` - an arbitrary, documented modeling choice for that
+    unrelated purpose). Velocity is a physical magnitude at the source cell, so `n`
+    and `h` must be co-located there, not mixed across cells.
+
+    This is recomputed fresh from whatever `H` currently is - not a one-time
+    constant - because real flow velocity (and thus the physically meaningful `dt`)
+    changes throughout an event as depths rise and fall. A caller building a real
+    elapsed-time timeline (e.g. for step 9's gauge-driven hydrograph) is expected to
+    call this once per simulation step and accumulate `elapsed_time += dt`.
+
+    Fully decoupled from `step()`'s `outflow_fraction`/substep decomposition - that
+    machinery is a separate, already-solved numerical-stability hack for the
+    synchronous Jacobi update, unrelated to this physical real-time mapping. Nothing
+    here constrains, or is constrained by, how much depth `step()` actually releases
+    per call - see `docs/project-plan.md`'s step 8 notes for the known gap this
+    leaves for later steps to reconcile.
+    """
+    if dx <= 0:
+        raise ValueError("dx must be positive")
+    if not (0 < courant_number <= 1):
+        raise ValueError("courant_number must be in (0, 1]")
+    if np.any(N <= 0):
+        raise ValueError("N (Manning roughness) must be strictly positive everywhere")
+
+    rows, cols = H.shape
+    Zp = np.pad(Z, 1, mode="constant", constant_values=np.inf)
+    Hp = np.pad(H, 1, mode="constant", constant_values=0.0)
+    wse = Zp + Hp
+    center = wse[1:-1, 1:-1]
+
+    max_slope = np.zeros((rows, cols))
+    for dr, dc in MOORE_OFFSETS:
+        neighbor = wse[1 + dr: 1 + dr + rows, 1 + dc: 1 + dc + cols]
+        distance = math.hypot(dr, dc)
+        drop = np.maximum(center - neighbor, 0.0)
+        slope = drop / (distance * dx)
+        max_slope = np.maximum(max_slope, slope)
+
+    # H should never be meaningfully negative (step()'s own tested invariant keeps it
+    # within -1e-9 of zero), but a fractional exponent on a negative float is nan.
+    velocity = (1.0 / N) * np.power(np.maximum(H, 0.0), 2.0 / 3.0) * np.sqrt(max_slope)
+    v_max = velocity.max()
+
+    if v_max <= 0:
+        return _NO_FLOW_FALLBACK_DT_SECONDS
+
+    return courant_number * dx / v_max
+
+
 def seed_pool_at_lowest_point(Z: np.ndarray, H: np.ndarray, volume: float) -> None:
     """Seed a concentrated water pool centered on the terrain's lowest point
     (e.g. a river channel), in place on `H`.

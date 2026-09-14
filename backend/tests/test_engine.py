@@ -1,7 +1,9 @@
+import math
+
 import numpy as np
 import pytest
 
-from simulation.engine import seed_pool_at_lowest_point, step
+from simulation.engine import compute_stable_dt, seed_pool_at_lowest_point, step
 
 
 def test_mass_conservation_and_nonnegative_depth():
@@ -177,3 +179,129 @@ def test_seed_pool_at_lowest_point_seeds_full_volume_at_the_minimum():
 
     assert H.sum() == pytest.approx(50.0)
     assert H[7, 3] > 0.0
+
+
+def _single_downhill_neighbor_grid(drop: float, depth: float):
+    """3x3 grid with exactly one downhill neighbor (north of center, orthogonal,
+    distance 1): every other neighbor is higher than the center, so it
+    contributes zero slope/velocity and can't affect the result. Only the
+    center cell has nonzero depth, so it's the only cell with nonzero velocity
+    - this makes the grid's `v_max` fully determined by one known cell/direction,
+    which is what makes a hand-derived expected value possible."""
+    rows, cols = 3, 3
+    Z = np.full((rows, cols), 20.0)  # every other neighbor: fixed, safely higher than center
+    Z[1, 1] = drop  # center
+    Z[0, 1] = 0.0  # north neighbor: downhill from center by exactly `drop`
+    N = np.full((rows, cols), 0.05)
+    H = np.zeros((rows, cols))
+    H[1, 1] = depth
+    return Z, H, N
+
+
+def test_compute_stable_dt_matches_hand_derived_value():
+    """Proves the formula is wired correctly end-to-end (dx placement, sqrt,
+    exponent, courant factor) by comparing against a value computed
+    independently via the textbook Manning/CFL formulas, not by calling any
+    internals of compute_stable_dt itself. Slope drives off water surface
+    elevation (Z + H), matching step()'s own WSE-based transition rule - the
+    north neighbor here is dry, so its WSE is just its bare Z."""
+    drop, depth, n, dx = 5.0, 2.0, 0.05, 30.0
+    Z, H, N = _single_downhill_neighbor_grid(drop, depth)
+
+    wse_drop = (drop + depth) - 0.0  # (Z_center + H_center) - (Z_north + H_north)
+    slope = wse_drop / (1.0 * dx)  # orthogonal neighbor, distance = 1 cell
+    v_max = (1.0 / n) * depth ** (2.0 / 3.0) * math.sqrt(slope)
+    expected_dt = 1.0 * dx / v_max  # courant_number default = 1.0
+
+    assert compute_stable_dt(Z, H, N, dx=dx) == pytest.approx(expected_dt)
+
+
+def test_compute_stable_dt_shrinks_as_slope_steepens():
+    """A steeper downhill drop means faster Manning velocity, so the CFL-
+    stable dt must be smaller."""
+    Z_gentle, H, N = _single_downhill_neighbor_grid(drop=1.0, depth=2.0)
+    Z_steep, _, _ = _single_downhill_neighbor_grid(drop=8.0, depth=2.0)
+
+    dt_gentle = compute_stable_dt(Z_gentle, H, N, dx=30.0)
+    dt_steep = compute_stable_dt(Z_steep, H, N, dx=30.0)
+
+    assert dt_steep < dt_gentle
+
+
+def test_compute_stable_dt_shrinks_as_depth_increases():
+    """Deeper water moves faster under Manning's equation (the h^(2/3) term),
+    independent of slope, so the CFL-stable dt must be smaller."""
+    Z, H_shallow, N = _single_downhill_neighbor_grid(drop=5.0, depth=0.5)
+    _, H_deep, _ = _single_downhill_neighbor_grid(drop=5.0, depth=5.0)
+
+    dt_shallow = compute_stable_dt(Z, H_shallow, N, dx=30.0)
+    dt_deep = compute_stable_dt(Z, H_deep, N, dx=30.0)
+
+    assert dt_deep < dt_shallow
+
+
+def test_compute_stable_dt_scales_as_dx_to_the_three_halves():
+    """Holding Z/H/N fixed, slope S is inversely proportional to dx, so
+    velocity v ~ sqrt(S) is proportional to dx^(-1/2), making
+    dt = courant*dx/v scale exactly as dx^(3/2) - an algebraic identity, not
+    just an empirical trend."""
+    Z, H, N = _single_downhill_neighbor_grid(drop=5.0, depth=2.0)
+
+    dt_30 = compute_stable_dt(Z, H, N, dx=30.0)
+    dt_120 = compute_stable_dt(Z, H, N, dx=120.0)
+
+    assert dt_120 == pytest.approx(dt_30 * 4 ** 1.5)
+
+
+def test_compute_stable_dt_scales_linearly_with_courant_number():
+    """courant_number is a direct multiplier on the CFL bound - halving it
+    must exactly halve the returned dt."""
+    Z, H, N = _single_downhill_neighbor_grid(drop=5.0, depth=2.0)
+
+    dt_full = compute_stable_dt(Z, H, N, dx=30.0, courant_number=1.0)
+    dt_half = compute_stable_dt(Z, H, N, dx=30.0, courant_number=0.5)
+
+    assert dt_half == pytest.approx(0.5 * dt_full)
+
+
+def test_compute_stable_dt_returns_fallback_when_no_flow():
+    """No cell has any downhill velocity (either no water at all, or water
+    present but the surface is perfectly flat) - the CFL bound is vacuous
+    (v_max == 0 would divide by zero), so a documented finite fallback must
+    be returned instead of nan/inf/a crash."""
+    rows, cols = 5, 5
+    N = np.full((rows, cols), 0.05)
+
+    dry_Z = np.zeros((rows, cols))
+    dry_H = np.zeros((rows, cols))
+    assert compute_stable_dt(dry_Z, dry_H, N, dx=30.0) == 3600.0
+
+    flat_Z = np.zeros((rows, cols))
+    flat_H = np.full((rows, cols), 3.0)  # water present, but WSE is flat everywhere
+    assert compute_stable_dt(flat_Z, flat_H, N, dx=30.0) == 3600.0
+
+
+def test_compute_stable_dt_rejects_nonpositive_dx():
+    Z, H, N = _single_downhill_neighbor_grid(drop=5.0, depth=2.0)
+
+    with pytest.raises(ValueError):
+        compute_stable_dt(Z, H, N, dx=0.0)
+    with pytest.raises(ValueError):
+        compute_stable_dt(Z, H, N, dx=-30.0)
+
+
+def test_compute_stable_dt_rejects_invalid_courant_number():
+    Z, H, N = _single_downhill_neighbor_grid(drop=5.0, depth=2.0)
+
+    with pytest.raises(ValueError):
+        compute_stable_dt(Z, H, N, dx=30.0, courant_number=0.0)
+    with pytest.raises(ValueError):
+        compute_stable_dt(Z, H, N, dx=30.0, courant_number=1.5)
+
+
+def test_compute_stable_dt_rejects_nonpositive_roughness():
+    Z, H, N = _single_downhill_neighbor_grid(drop=5.0, depth=2.0)
+    N[2, 2] = 0.0
+
+    with pytest.raises(ValueError):
+        compute_stable_dt(Z, H, N, dx=30.0)
