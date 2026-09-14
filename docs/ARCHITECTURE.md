@@ -61,7 +61,10 @@ terranova/
 ### `backend/simulation/` — the domain layer
 
 What belongs here: the CA transition rule itself — pure functions over NumPy arrays (`Z`, `H`, `N` for
-roughness). Currently just `engine.py`, exposing `step(Z, H, N, outflow_fraction=0.5)`.
+roughness). Currently just `engine.py`, exposing `step(Z, H, N, outflow_fraction=0.5)` and
+`compute_stable_dt(Z, H, N, dx, courant_number=1.0)` (step 8 — derives a real elapsed timestep from
+Manning flow velocities under a CFL condition; `dx` is passed in by the caller, never imported from
+`config/`, keeping this module dependency-free).
 
 What does NOT belong here: file I/O, geodata parsing, HTTP/WebSocket code, configuration loading,
 plotting. `simulation/` must stay dependency-free — no imports from `ingestion/`, `api/`, or `config/` —
@@ -154,8 +157,10 @@ into `scripts/`.
 ### `backend/tests/` — automated tests (active since step 2)
 
 What belongs here: a pytest suite mirroring the rest of the backend — `test_engine.py` (mass
-conservation, non-negative depth, input validation, the Manning directional-steering effect, and a
-checkerboard-artifact regression), `test_ingestion.py` (DEM sink-filling, nodata cropping, reprojection),
+conservation, non-negative depth, input validation, the Manning directional-steering effect, a
+checkerboard-artifact regression, and `compute_stable_dt`'s CFL derivation — a hand-derived value
+check, its physical monotonicity/scaling properties, and the zero-velocity fallback),
+`test_ingestion.py` (DEM sink-filling, nodata cropping, reprojection),
 `test_landcover.py` (Manning's-n class lookup, the nearest-vs-bilinear resampling regression, and
 roughness-matrix grid alignment), and `test_api.py` (REST validation, WebSocket frame streaming and mass
 conservation, run-id lifecycle — using `TestClient` with `app.dependency_overrides` and no `with` block,
