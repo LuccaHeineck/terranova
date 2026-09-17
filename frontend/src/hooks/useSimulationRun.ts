@@ -30,7 +30,9 @@ export function useSimulationRun() {
       closeStreamRef.current = openSimulationStream(created.run_id, {
         onFrame: (frame) => {
           setLatestFrame(frame)
-          setLog((prev) => [...prev, `step ${frame.step}: volume=${frame.volume.toFixed(4)}`])
+          const elapsedNote =
+            frame.elapsed_time !== undefined ? `, elapsed=${(frame.elapsed_time / 60).toFixed(1)}min` : ''
+          setLog((prev) => [...prev, `step ${frame.step}: volume=${frame.volume.toFixed(4)}${elapsedNote}`])
         },
         onDone: () => setStatus('done'),
         onError: (message) => {

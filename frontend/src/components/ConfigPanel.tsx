@@ -9,6 +9,7 @@ interface ConfigPanelProps {
 }
 
 export function ConfigPanel({ status, onStart }: ConfigPanelProps) {
+  const [mode, setMode] = useState<'seeded_pool' | 'gauge_driven'>('seeded_pool')
   const [steps, setSteps] = useState(200)
   const [frameInterval, setFrameInterval] = useState(5)
   const [outflowFraction, setOutflowFraction] = useState(0.5)
@@ -17,7 +18,13 @@ export function ConfigPanel({ status, onStart }: ConfigPanelProps) {
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault()
-    onStart({ steps, frame_interval: frameInterval, outflow_fraction: outflowFraction })
+    const params: SimulationParams = {
+      mode,
+      frame_interval: frameInterval,
+      outflow_fraction: outflowFraction,
+      ...(mode === 'seeded_pool' ? { steps } : {}),
+    }
+    onStart(params)
   }
 
   return (
@@ -25,17 +32,43 @@ export function ConfigPanel({ status, onStart }: ConfigPanelProps) {
       <h1 className="text-lg font-semibold text-gray-900">Terranova</h1>
       <p className="text-sm text-gray-500">Vale do Taquari flood simulation</p>
 
-      <label className="flex flex-col gap-1 text-sm text-gray-700">
-        Steps
-        <input
-          type="number"
-          min={1}
-          value={steps}
-          disabled={busy}
-          onChange={(e) => setSteps(Number(e.target.value))}
-          className="rounded border border-gray-300 px-2 py-1 disabled:opacity-50"
-        />
-      </label>
+      <fieldset className="flex flex-col gap-1 text-sm text-gray-700">
+        <legend className="mb-1">Run mode</legend>
+        <label className="flex items-center gap-2">
+          <input
+            type="radio"
+            name="mode"
+            checked={mode === 'seeded_pool'}
+            disabled={busy}
+            onChange={() => setMode('seeded_pool')}
+          />
+          Synthetic seeded pool
+        </label>
+        <label className="flex items-center gap-2">
+          <input
+            type="radio"
+            name="mode"
+            checked={mode === 'gauge_driven'}
+            disabled={busy}
+            onChange={() => setMode('gauge_driven')}
+          />
+          Real May 2024 event (gauge-driven)
+        </label>
+      </fieldset>
+
+      {mode === 'seeded_pool' && (
+        <label className="flex flex-col gap-1 text-sm text-gray-700">
+          Steps
+          <input
+            type="number"
+            min={1}
+            value={steps}
+            disabled={busy}
+            onChange={(e) => setSteps(Number(e.target.value))}
+            className="rounded border border-gray-300 px-2 py-1 disabled:opacity-50"
+          />
+        </label>
+      )}
 
       <label className="flex flex-col gap-1 text-sm text-gray-700">
         Frame interval
