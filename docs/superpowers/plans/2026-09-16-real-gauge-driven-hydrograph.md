@@ -92,7 +92,6 @@ HYDROGRAPH_EVENT_END = datetime(2024, 5, 10)
 ANA_TELEMETRIA_URL = "https://telemetriaws1.ana.gov.br/ServiceANA.asmx/HidroSerieHistorica"
 
 HYDROGRAPH_RAW_PATH = RAW_DIR / "estrela_stage_may2024.xml"
-HYDROGRAPH_PROCESSED_PATH = PROCESSED_DIR / "estrela_hydrograph.csv"
 
 # Which ROI boundary edge the river enters from upstream. Determined empirically
 # in Task 3 from the real processed Z (the edge whose channel cells have the
