@@ -89,9 +89,11 @@ HYDROGRAPH_RAW_PATH = RAW_DIR / "estrela_stage_may2024.xml"
 # Which ROI boundary edge the river enters from upstream. Determined empirically
 # in Task 3 from the real processed Z (the edge whose channel cells have the
 # highest minimum elevation is upstream - water flows downhill along the
-# channel toward the opposite edge). This value is a starting assumption only -
-# Task 3 requires running the actual check and correcting this if it disagrees.
-HYDROGRAPH_INFLOW_EDGE = "south"
+# channel toward the opposite edge). Verified against the real DEM:
+# north min=12.0, south min=11.0, west min=23.0, east min=26.0 - east has the
+# highest minimum, so it is upstream (corrected from an earlier unverified
+# "south" assumption made before the real DEM was available).
+HYDROGRAPH_INFLOW_EDGE = "east"
 
 CORS_ALLOWED_ORIGINS = os.environ.get(
     "CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
