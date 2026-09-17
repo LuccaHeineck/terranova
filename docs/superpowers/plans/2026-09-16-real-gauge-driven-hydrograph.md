@@ -39,16 +39,17 @@ unchanged), `requests` for the new ANA network call (already a dependency).
 
 ---
 
-## Known risk, flagged up front
+## Known risk, flagged up front (RESOLVED during Task 1 — see ledger)
 
-Task 1 hits a live external API (ANA's `telemetria1ws` SOAP/ASMX service) whose exact XML response
-schema cannot be verified from inside this planning session (a live `WebFetch` against ANA's own
-API manual page did not yield the concrete field-level XML schema). Task 1 and Task 2 are written
-with a concrete, best-effort starting implementation based on the well-documented .NET
-`DataSet`-XML-serialization convention this class of legacy ASMX service commonly uses, but Task 1
-explicitly includes a step to make one real request and inspect the actual response before Task 2's
-parser is finalized. Budget real iteration time here — this is normal for a first integration
-against an external API, not a sign the plan is wrong.
+Task 1 hit a live external API (ANA's `telemetria1ws` SOAP/ASMX service) whose exact XML response
+schema could not be verified from inside the planning session. Task 1's implementer ran the
+originally-drafted `HidroSerieHistorica` operation for real, found it returned the wrong data shape
+(a monthly summary, not a timestamped series), located and switched to the correct
+`DadosHidrometeorologicos` operation via the service's live WSDL, and confirmed the real schema
+against an actual 610-row download covering the full requested window. Task 1's report also
+surfaced a real `Vazao` (discharge) field on some rows, which changed Task 2's design — see Task 2's
+ruling note below. Task 2's code/tests in this plan already reflect the confirmed real schema and
+the `Vazao`-based ruling, not the original speculative draft.
 
 ---
 
@@ -185,14 +186,31 @@ git commit -m "feat: add ANA gauge stage download script for station 86879300"
 - Test: `backend/tests/test_hydrograph.py`
 
 **Interfaces:**
-- Consumes: nothing from Task 1 at the function level (all functions take explicit paths/arrays,
-  matching `landcover.py`'s style) — only uses the *file format* Task 1 downloads.
+- Consumes: the real, confirmed raw XML schema from Task 1's report (root `<DataTable>`, real data
+  under `<diffgr:diffgram><DocumentElement xmlns="">`, row tag `<DadosHidrometereologicos>` — note
+  ANA's own spelling, `<DataHora>` as `"yyyy-MM-dd HH:mm:ss "` with a trailing space, `<Nivel>` in
+  centimeters, rows in descending time order, one observed row with an empty `<Nivel />`).
 - Produces: `Hydrograph` (dataclass: `elapsed_seconds: np.ndarray`, `discharge_m3s: np.ndarray`,
   `duration_seconds` property, `discharge_at(elapsed_seconds: float) -> float` method),
-  `stage_to_discharge(stage_m, rating_curve=RATING_CURVE_POINTS) -> np.ndarray`,
+  `stage_to_discharge(stage_m, rating_curve) -> np.ndarray`,
   `load_raw_stage_series(raw_path) -> tuple[np.ndarray, np.ndarray]`,
+  `find_calibration_pairs(raw_path) -> list[tuple[float, float]]`,
   `build_hydrograph(raw_path=settings.HYDROGRAPH_RAW_PATH) -> Hydrograph` — all consumed by
   Task 4's `api/state.py`.
+
+**Ruling (controller, preflight-during-execution — see ledger):** Task 1's real download revealed
+that ANA's response carries a `Vazao` (discharge, m³/s) field directly on some rows alongside
+`Nivel` (stage) — real, ANA-computed discharge for this exact station, not something this task
+needs to independently research from an external source. This supersedes the original plan's
+"research and hardcode an externally-cited `RATING_CURVE_POINTS` table" instruction: instead,
+`find_calibration_pairs` extracts real (stage, discharge) pairs directly from the same downloaded
+file wherever `Vazao` is present, and `build_hydrograph` uses those as the rating curve for the
+rest of the series. Because those real pairs may not span the full observed stage range for this
+event (`Vazao` is only present on a subset of rows), `stage_to_discharge` clips to the nearest
+calibrated endpoint outside that range (flat extrapolation, via plain `np.interp` semantics) instead
+of raising — a documented simplification in the same spirit as `simulation.engine`'s
+`_NO_FLOW_FALLBACK_DT_SECONDS`. This is more accurate than an independently-sourced generic curve
+and removes the previous plan's external-research risk entirely.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -202,7 +220,43 @@ Create `backend/tests/test_hydrograph.py`:
 import numpy as np
 import pytest
 
-from ingestion.hydrograph import Hydrograph, load_raw_stage_series, stage_to_discharge
+from ingestion.hydrograph import Hydrograph, find_calibration_pairs, load_raw_stage_series, stage_to_discharge
+
+# Shape confirmed against a real download in Task 1 (see task-1-report.md) - root
+# <DataTable xmlns="http://MRCS/"> wraps an inline xs:schema block (no readings,
+# skip) and a <diffgr:diffgram><DocumentElement xmlns=""> holding the real rows.
+# Note the row tag's real spelling (`DadosHidrometereologicos`, extra "re" - ANA's
+# own inconsistency, not a typo) and the trailing space inside <DataHora> text.
+_SAMPLE_XML = """<?xml version="1.0" encoding="utf-8"?>
+<DataTable xmlns="http://MRCS/">
+  <xs:schema id="NewDataSet" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata" />
+  <diffgr:diffgram xmlns:msdata="urn:schemas-microsoft-com:xml-msdata" xmlns:diffgr="urn:schemas-microsoft-com:xml-diffgram-v1">
+    <DocumentElement xmlns="">
+      <DadosHidrometereologicos diffgr:id="r1" msdata:rowOrder="0">
+        <CodEstacao>86879300</CodEstacao>
+        <DataHora>2024-05-01 00:30:00 </DataHora>
+        <Vazao />
+        <Nivel>1300.00</Nivel>
+        <Chuva />
+      </DadosHidrometereologicos>
+      <DadosHidrometereologicos diffgr:id="r2" msdata:rowOrder="1">
+        <CodEstacao>86879300</CodEstacao>
+        <DataHora>2024-05-01 00:15:00 </DataHora>
+        <Vazao>5000.00</Vazao>
+        <Nivel>1250.00</Nivel>
+        <Chuva />
+      </DadosHidrometereologicos>
+      <DadosHidrometereologicos diffgr:id="r3" msdata:rowOrder="2">
+        <CodEstacao>86879300</CodEstacao>
+        <DataHora>2024-05-01 00:00:00 </DataHora>
+        <Vazao>10000.00</Vazao>
+        <Nivel>1200.00</Nivel>
+        <Chuva />
+      </DadosHidrometereologicos>
+    </DocumentElement>
+  </diffgr:diffgram>
+</DataTable>
+"""
 
 
 def test_stage_to_discharge_interpolates_linearly_between_breakpoints():
@@ -213,29 +267,44 @@ def test_stage_to_discharge_interpolates_linearly_between_breakpoints():
     assert discharge.tolist() == pytest.approx([50.0, 300.0])
 
 
-def test_stage_to_discharge_raises_outside_curve_range():
+def test_stage_to_discharge_clips_to_nearest_endpoint_outside_curve_range():
     curve = [(0.0, 0.0), (10.0, 100.0)]
 
-    with pytest.raises(ValueError, match="range"):
-        stage_to_discharge(np.array([15.0]), rating_curve=curve)
+    discharge = stage_to_discharge(np.array([-5.0, 15.0]), rating_curve=curve)
+
+    assert discharge.tolist() == pytest.approx([0.0, 100.0])
 
 
-def test_load_raw_stage_series_parses_ana_dataset_xml(tmp_path):
+def test_load_raw_stage_series_parses_real_ana_response_shape(tmp_path):
     raw_path = tmp_path / "raw.xml"
-    raw_path.write_text(
-        """<?xml version="1.0" encoding="utf-8"?>
-        <DocumentElement>
-          <Table><DataHora>01/05/2024 00:00:00</DataHora><Cota>1200</Cota></Table>
-          <Table><DataHora>01/05/2024 00:15:00</DataHora><Cota>1250</Cota></Table>
-          <Table><DataHora>01/05/2024 00:30:00</DataHora><Cota>1300</Cota></Table>
-        </DocumentElement>
-        """
-    )
+    raw_path.write_text(_SAMPLE_XML)
 
     elapsed_seconds, stage_m = load_raw_stage_series(raw_path)
 
+    # Rows arrive in descending time order in the real feed; the parser must
+    # re-sort ascending before computing elapsed time.
     assert elapsed_seconds.tolist() == pytest.approx([0.0, 900.0, 1800.0])
     assert stage_m.tolist() == pytest.approx([12.0, 12.5, 13.0])  # cm -> m
+
+
+def test_load_raw_stage_series_skips_rows_with_empty_nivel(tmp_path):
+    raw_path = tmp_path / "raw.xml"
+    raw_path.write_text(_SAMPLE_XML.replace("<Nivel>1200.00</Nivel>", "<Nivel />"))
+
+    elapsed_seconds, stage_m = load_raw_stage_series(raw_path)
+
+    assert len(elapsed_seconds) == 2
+    assert stage_m.tolist() == pytest.approx([12.0, 13.0])
+
+
+def test_find_calibration_pairs_extracts_rows_with_both_nivel_and_vazao(tmp_path):
+    raw_path = tmp_path / "raw.xml"
+    raw_path.write_text(_SAMPLE_XML)
+
+    pairs = find_calibration_pairs(raw_path)
+
+    # Only the 2 rows with a non-empty <Vazao> contribute; sorted by stage.
+    assert pairs == [(12.0, 10000.0), (12.5, 5000.0)]
 
 
 def test_hydrograph_discharge_at_interpolates_between_samples():
@@ -255,14 +324,6 @@ def test_hydrograph_discharge_at_raises_outside_recorded_range():
         hydrograph.discharge_at(1000.0)
 ```
 
-**Important:** the exact tag names (`DocumentElement`/`Table`/`DataHora`/`Cota`) in
-`test_load_raw_stage_series_parses_ana_dataset_xml` are a starting hypothesis based on the common
-.NET `DataSet`-XML convention. **Before writing this test for real, substitute the actual tag
-names/date format/units you recorded in Task 1, Step 3**, so the test matches the real file you
-downloaded, not a guess. If Task 1 found a genuinely different structure (e.g. SOAP envelope
-wrapping, different element names), rewrite this fixture and the implementation in Step 3 below to
-match reality — do not force the real API into this hypothesis.
-
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cd backend && .venv/bin/pytest tests/test_hydrograph.py -v`
@@ -273,21 +334,34 @@ Expected: FAIL with `ImportError`/`ModuleNotFoundError` (`ingestion.hydrograph` 
 Create `backend/ingestion/hydrograph.py`:
 
 ```python
-"""Turn the raw ANA/SGB gauge stage record for station 86879300 (Porto Fluvial de
+"""Turn the raw ANA/SGB gauge record for station 86879300 (Porto Fluvial de
 Estrela) into a queryable discharge hydrograph.
 
-<Record here, from Task 1 Step 3's real inspection, the confirmed raw XML shape:
-root element, per-reading element tag, timestamp format, and stage units/scale
-factor. This docstring must describe the real file, not a guess.>
+Raw XML shape (confirmed against a real download - see
+`.superpowers/sdd/2026-09-16-real-gauge-driven-hydrograph/task-1-report.md`):
+root `<DataTable xmlns="http://MRCS/">` wraps an inline `<xs:schema>` block (the
+dataset's schema, not data - skipped) and a
+`<diffgr:diffgram><DocumentElement xmlns="">` holding the real rows, one
+`<DadosHidrometereologicos>` element per reading (note ANA's own spelling, an
+extra "re" versus the operation name), each with `<DataHora>` ("yyyy-MM-dd
+HH:mm:ss ", trailing space), `<Nivel>` (stage, centimeters - occasionally an
+empty `<Nivel />`), `<Vazao>` (discharge, m3/s - present only on a subset of
+rows), and `<Chuva>` (rainfall, unused here). Rows arrive in descending time
+order.
 
-Pipeline: `load_raw_stage_series` parses the raw XML into (elapsed_seconds, stage_m)
-- local-only, mirroring `dem.py`/`landcover.py`'s "network script saves raw bytes,
-ingestion module does all parsing" split. `stage_to_discharge` applies a rating
-curve to convert stage into discharge (m3/s). `build_hydrograph` runs both and
-returns a `Hydrograph`, queryable at arbitrary elapsed times via linear
-interpolation - needed because the engine's `dt` (from
-`simulation.engine.compute_stable_dt`) is adaptive, not fixed to the raw 15-minute
-sample spacing.
+Pipeline: `load_raw_stage_series` parses the raw XML into (elapsed_seconds,
+stage_m) - local-only, mirroring `dem.py`/`landcover.py`'s "network script saves
+raw bytes, ingestion module does all parsing" split. `find_calibration_pairs`
+extracts real (stage, discharge) pairs from the same file wherever ANA's own
+`Vazao` is present - this station's real, already-computed discharge, not an
+independently sourced generic curve (see the plan's Task 2 ruling for why this
+differs from earlier drafts of this task). `stage_to_discharge` applies that
+curve to the full stage series (`np.interp` clips outside the curve's calibrated
+range rather than raising - real `Vazao` coverage may not span this event's full
+observed stage range). `build_hydrograph` runs all of this and returns a
+`Hydrograph`, queryable at arbitrary elapsed times via linear interpolation -
+needed because the engine's `dt` (from `simulation.engine.compute_stable_dt`) is
+adaptive, not fixed to the raw feed's irregular sample spacing.
 
 Reads from `data/raw/`. Depends on `config/` for paths. No CA logic here, no
 imports from `simulation/` - see `docs/ARCHITECTURE.md`.
@@ -302,50 +376,77 @@ import numpy as np
 
 from config import settings
 
-# Stage (m) -> discharge (m3/s) rating curve ("curva-chave") for ANA/SGB station
-# 86879300 (Porto Fluvial de Estrela, Taquari river). Sourced from <RECORD THE
-# REAL SOURCE HERE - e.g. ANA's HidroWeb station inventory page, or the SGB
-# report "Revisão e consolidação da série histórica" -
-# https://rigeo.sgb.gov.br/server/api/core/bitstreams/733ebd7c-1cb6-4541-ab5d-34ad77cdd73a/content
-# - fetched/read on <date>>. Sorted by stage; each tuple is (stage_m, discharge_m3s).
-RATING_CURVE_POINTS: list[tuple[float, float]] = [
-    # Fill in with the real, cited breakpoints before this is used for anything
-    # beyond the unit tests above (which pass their own synthetic curve
-    # explicitly and never touch this constant).
-]
 
-
-def stage_to_discharge(
-    stage_m: np.ndarray,
-    rating_curve: list[tuple[float, float]] = RATING_CURVE_POINTS,
-) -> np.ndarray:
-    """Piecewise-linear interpolation of stage (m) to discharge (m3/s) via
-    `rating_curve` breakpoints. Extrapolation beyond the curve's calibrated range
-    raises rather than guessing a slope beyond real data.
+def _read_rows(raw_path: Path) -> list[ElementTree.Element]:
+    """Shared row-extraction for both `load_raw_stage_series` and
+    `find_calibration_pairs` - parse once, skip past the `<xs:schema>` block
+    to the real `<DocumentElement>` under the diffgram, return its rows.
     """
-    stages = np.array([p[0] for p in rating_curve])
-    discharges = np.array([p[1] for p in rating_curve])
-    if np.any(stage_m < stages.min()) or np.any(stage_m > stages.max()):
-        raise ValueError(
-            f"stage_m has values outside the rating curve's calibrated range "
-            f"[{stages.min()}, {stages.max()}]"
-        )
-    return np.interp(stage_m, stages, discharges)
+    tree = ElementTree.parse(raw_path)
+    document_element = next(tree.getroot().iter("DocumentElement"))
+    return document_element.findall("DadosHidrometereologicos")
 
 
 def load_raw_stage_series(raw_path: Path) -> tuple[np.ndarray, np.ndarray]:
     """Parse the raw XML `download_hydrograph.py` saves into
-    (elapsed_seconds, stage_m), elapsed_seconds measured from the first reading.
+    (elapsed_seconds, stage_m), elapsed_seconds measured from the earliest
+    reading. Rows with an empty `<Nivel />` (observed rarely in the real feed)
+    are skipped - there is no stage reading to use.
     """
-    tree = ElementTree.parse(raw_path)
-    rows = tree.getroot().findall("Table")
+    readings = []
+    for row in _read_rows(raw_path):
+        nivel_text = row.find("Nivel").text
+        if not nivel_text:
+            continue
+        timestamp = datetime.strptime(row.find("DataHora").text.strip(), "%Y-%m-%d %H:%M:%S")
+        readings.append((timestamp, float(nivel_text) / 100.0))  # cm -> m
 
-    timestamps = [datetime.strptime(row.find("DataHora").text, "%d/%m/%Y %H:%M:%S") for row in rows]
-    stage_cm = np.array([float(row.find("Cota").text) for row in rows])
+    readings.sort(key=lambda reading: reading[0])  # feed arrives in descending time order
+    start = readings[0][0]
+    elapsed_seconds = np.array([(timestamp - start).total_seconds() for timestamp, _ in readings])
+    stage_m = np.array([stage for _, stage in readings])
+    return elapsed_seconds, stage_m
 
-    start = timestamps[0]
-    elapsed_seconds = np.array([(t - start).total_seconds() for t in timestamps])
-    return elapsed_seconds, stage_cm / 100.0
+
+def find_calibration_pairs(raw_path: Path) -> list[tuple[float, float]]:
+    """Extract real (stage_m, discharge_m3s) pairs from rows where ANA's own
+    `Vazao` field is present alongside `Nivel` - this station's real,
+    already-computed discharge for this event, used as the rating curve by
+    `build_hydrograph` instead of an independently sourced one.
+    """
+    pairs: dict[float, list[float]] = {}
+    for row in _read_rows(raw_path):
+        nivel_text = row.find("Nivel").text
+        vazao_text = row.find("Vazao").text
+        if not nivel_text or not vazao_text:
+            continue
+        stage_m = float(nivel_text) / 100.0
+        pairs.setdefault(stage_m, []).append(float(vazao_text))
+
+    if len(pairs) < 2:
+        raise ValueError(
+            f"found only {len(pairs)} distinct stage/discharge pair(s) with a real "
+            "Vazao reading in this file - need at least 2 to build a rating curve"
+        )
+
+    # Average duplicate stage readings so the curve stays strictly increasing
+    # (required for np.interp).
+    return sorted((stage, sum(values) / len(values)) for stage, values in pairs.items())
+
+
+def stage_to_discharge(stage_m: np.ndarray, rating_curve: list[tuple[float, float]]) -> np.ndarray:
+    """Piecewise-linear interpolation of stage (m) to discharge (m3/s) via
+    `rating_curve` breakpoints. A stage outside the curve's calibrated range is
+    clipped to the nearest endpoint's discharge (flat extrapolation - `np.interp`'s
+    default behavior outside its domain) rather than raising: a documented
+    simplification, the same kind of pragmatic engineering choice as
+    `simulation.engine`'s `_NO_FLOW_FALLBACK_DT_SECONDS`, made necessary because
+    real field-measured discharge (`find_calibration_pairs`) doesn't necessarily
+    span this event's full observed stage range.
+    """
+    stages = np.array([p[0] for p in rating_curve])
+    discharges = np.array([p[1] for p in rating_curve])
+    return np.interp(stage_m, stages, discharges)
 
 
 @dataclass
@@ -371,29 +472,23 @@ class Hydrograph:
 def build_hydrograph(raw_path: Path = settings.HYDROGRAPH_RAW_PATH) -> Hydrograph:
     """Run the full raw-XML -> parse -> rating-curve -> Hydrograph pipeline."""
     elapsed_seconds, stage_m = load_raw_stage_series(raw_path)
-    discharge_m3s = stage_to_discharge(stage_m)
+    rating_curve = find_calibration_pairs(raw_path)
+    discharge_m3s = stage_to_discharge(stage_m, rating_curve)
     return Hydrograph(elapsed_seconds=elapsed_seconds, discharge_m3s=discharge_m3s)
 ```
 
-If Task 1's real inspection found different tag names/timestamp format/units than
-`DocumentElement`/`Table`/`DataHora`/`Cota`/centimeters, adjust `load_raw_stage_series` (and the
-test fixture above) to match what you actually observed — this is the one place in this task where
-the real external data shape, not this plan, is the source of truth.
-
-**Before running the tests, fill in `RATING_CURVE_POINTS` with the real, cited rating curve for
-station 86879300** (research it: ANA's HidroWeb station inventory page, the SGB "Revisão e
-consolidação da série histórica" report linked above, or ANA's inventory API — do not invent
-numbers). Once filled in, sanity-check it by running
-`python -c "from ingestion.hydrograph import stage_to_discharge; import numpy as np; print(stage_to_discharge(np.array([33.66])))"`
-(33.66 m was the May 2024 event's recorded peak stage at this station) and confirm the resulting
-discharge is a physically plausible Taquari-basin flood value (thousands of m³/s, not near-zero or
-absurdly large) before moving on — this is a numerical sanity check, not a unit test, since the
-real curve isn't exercised by the tests above (they pass their own synthetic curves explicitly).
+**Sanity-check with the real downloaded file before moving on** (not a unit test — the tests above
+use synthetic fixtures): run
+`.venv/bin/python -c "from ingestion.hydrograph import build_hydrograph; h = build_hydrograph(); print('duration_s=', h.duration_seconds); print('peak discharge m3s=', max(h.discharge_m3s)); print('discharge at start=', h.discharge_at(0.0))"`
+from `backend/`, and confirm the peak discharge is a physically plausible Taquari-basin flood value
+(thousands of m³/s, not near-zero or absurdly large — Task 1's report noted an observed `Vazao` of
+`13774.62` near the event's peak, so the derived series' max should be in that neighborhood, not
+wildly different).
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd backend && .venv/bin/pytest tests/test_hydrograph.py -v`
-Expected: PASS (all 5 tests).
+Expected: PASS (all 7 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -565,7 +660,7 @@ def discharge_to_inflow(
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `cd backend && .venv/bin/pytest tests/test_hydrograph.py -v`
-Expected: PASS (all 9 tests).
+Expected: PASS (all 11 tests — 7 from Task 2 + 4 new here).
 
 - [ ] **Step 6: Commit**
 
@@ -919,7 +1014,7 @@ async def stream_simulation(
 - [ ] **Step 6: Run tests to verify they pass**
 
 Run: `cd backend && .venv/bin/pytest tests/ -v`
-Expected: PASS, full suite (35 existing + 9 from Tasks 2-3 + 4 new here = 48).
+Expected: PASS, full suite (35 existing + 11 from Tasks 2-3 + 4 new here = 50).
 
 - [ ] **Step 7: Commit**
 
