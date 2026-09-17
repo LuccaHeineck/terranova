@@ -87,13 +87,28 @@ ANA_TELEMETRIA_URL = "https://telemetriaws1.ana.gov.br/ServiceANA.asmx/DadosHidr
 HYDROGRAPH_RAW_PATH = RAW_DIR / "estrela_stage_may2024.xml"
 
 # Which ROI boundary edge the river enters from upstream. Determined empirically
-# in Task 3 from the real processed Z (the edge whose channel cells have the
-# highest minimum elevation is upstream - water flows downhill along the
-# channel toward the opposite edge). Verified against the real DEM:
-# north min=12.0, south min=11.0, west min=23.0, east min=26.0 - east has the
-# highest minimum, so it is upstream (corrected from an earlier unverified
-# "south" assumption made before the real DEM was available).
-HYDROGRAPH_INFLOW_EDGE = "east"
+# from the real processed Z, in two stages - BOTH matter, and skipping the first
+# one is what made an earlier revision of this constant wrong:
+#
+#   1. Restrict to the edges the channel actually crosses. Taking the real DEM's
+#      global minimum (11.0m) as the channel bed and `find_boundary_inflow_mask`'s
+#      +2.0m margin as "channel elevation", only two edges carry channel cells:
+#        north  min=12.0m  -> 8 cells at or below 13.0m (columns 155-162)
+#        south  min=11.0m  -> 9 cells at or below 13.0m (columns 48-56)
+#        west   min=23.0m  -> 0 channel cells (valley wall)
+#        east   min=26.0m  -> 0 channel cells (valley wall)
+#      The Taquari enters this ROI on the north edge and leaves on the south; the
+#      west and east edges are hillsides it never reaches.
+#   2. Of those channel-crossing edges only, the one with the HIGHER minimum is
+#      upstream (water runs downhill along the channel toward the opposite edge):
+#      north (12.0m) > south (11.0m), so north is upstream.
+#
+# An earlier revision applied rule 2 alone across all four edges and picked
+# "east" - whose 26.0m "minimum" is a 2-cell dip on a hillside sitting ~14m above
+# the real channel bed, not the river at all. If the ROI above is ever changed,
+# re-run both stages against the newly processed Z; rule 2 on its own is only
+# meaningful once rule 1 has thrown out the edges the channel never crosses.
+HYDROGRAPH_INFLOW_EDGE = "north"
 
 CORS_ALLOWED_ORIGINS = os.environ.get(
     "CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"

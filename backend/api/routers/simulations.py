@@ -119,6 +119,18 @@ async def _run_gauge_driven(
 
     while elapsed_time < hydrograph.duration_seconds:
         dt = compute_stable_dt(Z, H, N, TARGET_RESOLUTION_METERS)
+        # Cap at the raw ANA feed's own typical sample spacing (~900s). CFL gives
+        # an upper bound on dt, not a target, so a smaller dt is always safe - and
+        # on a still-dry grid `compute_stable_dt` returns engine.py's
+        # `_NO_FLOW_FALLBACK_DT_SECONDS` (3600s), which is sized for redistribution
+        # stability, not for how much external inflow volume one step should
+        # inject. Without this cap the first step dumps an hour of real
+        # thousands-of-m3/s discharge into a few boundary cells at once. Capping
+        # bounds any single injection burst to a physically motivated timescale
+        # instead of an arbitrary hour (it does not eliminate the first-step
+        # transient - concentrating a whole river's discharge through a few 30m
+        # cells is an inherent coarse-grid simplification).
+        dt = min(dt, 900.0)
         # Clip so the final iteration lands exactly on the hydrograph's end, never
         # past it - Hydrograph.discharge_at raises outside its recorded range.
         dt = min(dt, hydrograph.duration_seconds - elapsed_time)
@@ -132,7 +144,13 @@ async def _run_gauge_driven(
         t += 1
 
         assert H.min() >= -1e-9, f"negative depth at step {t}: {H.min()}"
-        assert abs(H.sum() - cumulative_inflow) < 1e-6, f"volume drifted at step {t}: {H.sum()} vs {cumulative_inflow}"
+        # Relative, unlike _run_seeded_pool's absolute 1e-6: there the volume is a
+        # small fixed constant (SEED_VOLUME), here it grows to order 1e7 over
+        # 100k+ steps of real inflow, where float64 round-off alone can exceed an
+        # absolute 1e-6 without anything actually being wrong.
+        assert abs(H.sum() - cumulative_inflow) <= 1e-9 * max(1.0, abs(cumulative_inflow)), (
+            f"volume drifted at step {t}: {H.sum()} vs {cumulative_inflow}"
+        )
 
         if t % params.frame_interval == 0 or elapsed_time >= hydrograph.duration_seconds:
             await websocket.send_json(
