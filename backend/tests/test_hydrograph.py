@@ -1,7 +1,14 @@
 import numpy as np
 import pytest
 
-from ingestion.hydrograph import Hydrograph, find_calibration_pairs, load_raw_stage_series, stage_to_discharge
+from ingestion.hydrograph import (
+    Hydrograph,
+    discharge_to_inflow,
+    find_boundary_inflow_mask,
+    find_calibration_pairs,
+    load_raw_stage_series,
+    stage_to_discharge,
+)
 
 # Shape confirmed against a real download in Task 1 (see task-1-report.md) - root
 # <DataTable xmlns="http://MRCS/"> wraps an inline xs:schema block (no readings,
@@ -105,3 +112,41 @@ def test_hydrograph_discharge_at_raises_outside_recorded_range():
 
     with pytest.raises(ValueError, match="range"):
         hydrograph.discharge_at(1000.0)
+
+
+def test_find_boundary_inflow_mask_locates_channel_on_given_edge():
+    # A 5x5 synthetic terrain: the north edge has a clear low notch (the channel)
+    # at columns 2-3, everywhere else is much higher.
+    Z = np.full((5, 5), 100.0)
+    Z[0, 2:4] = 10.0
+
+    mask = find_boundary_inflow_mask(Z, edge="north")
+
+    expected = np.zeros((5, 5), dtype=bool)
+    expected[0, 2:4] = True
+    assert np.array_equal(mask, expected)
+
+
+def test_find_boundary_inflow_mask_rejects_invalid_edge():
+    Z = np.full((5, 5), 100.0)
+
+    with pytest.raises(ValueError, match="edge"):
+        find_boundary_inflow_mask(Z, edge="northwest")
+
+
+def test_discharge_to_inflow_splits_volume_uniformly_across_mask():
+    mask = np.array([[True, False, True], [False, False, False], [False, False, False]])
+
+    inflow = discharge_to_inflow(discharge_m3s=9.0, dt_seconds=100.0, mask=mask, cell_area_m2=900.0)
+
+    # total volume = 9.0 m3/s * 100s = 900 m3; / 900 m2 cell area = 1.0 depth-unit
+    # total, split evenly across the 2 masked cells.
+    assert inflow[mask].tolist() == pytest.approx([0.5, 0.5])
+    assert inflow[~mask].tolist() == pytest.approx([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+
+
+def test_discharge_to_inflow_rejects_empty_mask():
+    mask = np.zeros((3, 3), dtype=bool)
+
+    with pytest.raises(ValueError, match="mask"):
+        discharge_to_inflow(discharge_m3s=9.0, dt_seconds=100.0, mask=mask, cell_area_m2=900.0)

@@ -27,6 +27,13 @@ observed stage range). `build_hydrograph` runs all of this and returns a
 needed because the engine's `dt` (from `simulation.engine.compute_stable_dt`) is
 adaptive, not fixed to the raw feed's irregular sample spacing.
 
+`find_boundary_inflow_mask` and `discharge_to_inflow` turn a `Hydrograph`
+discharge value into the per-cell `inflow` array `simulation.engine.step`
+expects: the former locates the river-channel cells on one real ROI boundary
+edge from the terrain `Z` itself (the gauge's own coordinates sit inside the
+ROI, not on a boundary), the latter splits a discharge over `dt_seconds`
+uniformly across those cells.
+
 Reads from `data/raw/`. Depends on `config/` for paths. No CA logic here, no
 imports from `simulation/` - see `docs/ARCHITECTURE.md`.
 """
@@ -139,3 +146,73 @@ def build_hydrograph(raw_path: Path = settings.HYDROGRAPH_RAW_PATH) -> Hydrograp
     rating_curve = find_calibration_pairs(raw_path)
     discharge_m3s = stage_to_discharge(stage_m, rating_curve)
     return Hydrograph(elapsed_seconds=elapsed_seconds, discharge_m3s=discharge_m3s)
+
+
+# Channel cells on a boundary edge are identified as those within this many
+# meters of that edge's minimum elevation - wide enough to capture the real
+# channel's width (a few cells), not just its single lowest pixel.
+_CHANNEL_ELEVATION_MARGIN_METERS = 2.0
+
+
+def find_boundary_inflow_mask(
+    Z: np.ndarray,
+    edge: str,
+    margin_m: float = _CHANNEL_ELEVATION_MARGIN_METERS,
+) -> np.ndarray:
+    """Boolean mask, same shape as `Z`, marking the river-channel cells on one ROI
+    boundary `edge` ("north"/"south"/"east"/"west") - where upstream inflow should
+    enter, found from the real terrain rather than the gauge's literal coordinates
+    (which sit inside the ROI, not on a boundary).
+    """
+    edges = {
+        "north": Z[0, :],
+        "south": Z[-1, :],
+        "west": Z[:, 0],
+        "east": Z[:, -1],
+    }
+    if edge not in edges:
+        raise ValueError(f"edge must be one of {sorted(edges)}, got {edge!r}")
+
+    strip = edges[edge]
+    channel = strip <= strip.min() + margin_m
+    if not channel.any():
+        raise ValueError(f"no channel cells found on edge {edge!r}")
+
+    mask = np.zeros_like(Z, dtype=bool)
+    if edge == "north":
+        mask[0, :] = channel
+    elif edge == "south":
+        mask[-1, :] = channel
+    elif edge == "west":
+        mask[:, 0] = channel
+    else:
+        mask[:, -1] = channel
+    return mask
+
+
+def discharge_to_inflow(
+    discharge_m3s: float,
+    dt_seconds: float,
+    mask: np.ndarray,
+    cell_area_m2: float,
+) -> np.ndarray:
+    """Convert a discharge (m3/s) sustained over `dt_seconds` into the per-cell
+    depth-increment array `simulation.engine.step`'s `inflow` parameter expects,
+    split uniformly across `mask`'s True cells.
+
+    Uniform split, not width- or depth-weighted: `mask` is already scoped to the
+    channel's real cells (see `find_boundary_inflow_mask`), and depth-weighting
+    would need an assumed channel cross-section shape this project has no data to
+    justify. `cell_area_m2` converts real m3 into the same depth-summed unit
+    convention `H`/`step()`'s `inflow` already use (this project does not track
+    true physical m3 elsewhere either - see `docs/project-plan.md`).
+    """
+    if not mask.any():
+        raise ValueError("mask has no True cells to inject inflow into")
+
+    total_volume_m3 = discharge_m3s * dt_seconds
+    total_depth_units = total_volume_m3 / cell_area_m2
+
+    inflow = np.zeros(mask.shape)
+    inflow[mask] = total_depth_units / mask.sum()
+    return inflow
