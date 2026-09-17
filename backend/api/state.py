@@ -11,9 +11,13 @@ disk or triggering the app's lifespan at all.
 
 import numpy as np
 
+from ingestion.hydrograph import Hydrograph
+
 Z: np.ndarray | None = None
 N: np.ndarray | None = None
 BOUNDS: tuple[float, float, float, float] | None = None
+HYDROGRAPH: Hydrograph | None = None
+INFLOW_MASK: np.ndarray | None = None
 
 
 def get_terrain() -> np.ndarray:
@@ -26,3 +30,11 @@ def get_roughness() -> np.ndarray:
 
 def get_bounds() -> tuple[float, float, float, float]:
     return BOUNDS
+
+
+def get_hydrograph() -> Hydrograph | None:
+    return HYDROGRAPH
+
+
+def get_inflow_mask() -> np.ndarray | None:
+    return INFLOW_MASK
