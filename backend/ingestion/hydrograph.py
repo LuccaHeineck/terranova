@@ -66,7 +66,11 @@ def load_raw_stage_series(raw_path: Path) -> tuple[np.ndarray, np.ndarray]:
     """
     readings = []
     for row in _read_rows(raw_path):
-        nivel_text = row.find("Nivel").text
+        # findtext, not find(...).text: returns None for a missing tag as well as
+        # for a present-but-empty one, so a future re-download that drops the tag
+        # entirely is skipped like any other unusable row instead of raising
+        # AttributeError.
+        nivel_text = row.findtext("Nivel")
         if not nivel_text:
             continue
         timestamp = datetime.strptime(row.find("DataHora").text.strip(), "%Y-%m-%d %H:%M:%S")
@@ -87,8 +91,9 @@ def find_calibration_pairs(raw_path: Path) -> list[tuple[float, float]]:
     """
     pairs: dict[float, list[float]] = {}
     for row in _read_rows(raw_path):
-        nivel_text = row.find("Nivel").text
-        vazao_text = row.find("Vazao").text
+        # findtext for the same reason as in load_raw_stage_series above.
+        nivel_text = row.findtext("Nivel")
+        vazao_text = row.findtext("Vazao")
         if not nivel_text or not vazao_text:
             continue
         stage_m = float(nivel_text) / 100.0
@@ -107,13 +112,28 @@ def find_calibration_pairs(raw_path: Path) -> list[tuple[float, float]]:
 
 def stage_to_discharge(stage_m: np.ndarray, rating_curve: list[tuple[float, float]]) -> np.ndarray:
     """Piecewise-linear interpolation of stage (m) to discharge (m3/s) via
-    `rating_curve` breakpoints. A stage outside the curve's calibrated range is
-    clipped to the nearest endpoint's discharge (flat extrapolation - `np.interp`'s
-    default behavior outside its domain) rather than raising: a documented
-    simplification, the same kind of pragmatic engineering choice as
-    `simulation.engine`'s `_NO_FLOW_FALLBACK_DT_SECONDS`, made necessary because
-    real field-measured discharge (`find_calibration_pairs`) doesn't necessarily
-    span this event's full observed stage range.
+    `rating_curve` breakpoints, which must be sorted ascending by stage -
+    `np.interp` does not sort its `xp` and returns silently wrong values otherwise
+    (`find_calibration_pairs`, the only real caller, already returns a sorted
+    curve).
+
+    A stage outside the curve's calibrated range is clipped to the nearest
+    endpoint's discharge (flat extrapolation - `np.interp`'s default behavior
+    outside its domain) rather than raising: a documented simplification, the same
+    kind of pragmatic engineering choice as `simulation.engine`'s
+    `_NO_FLOW_FALLBACK_DT_SECONDS`, made necessary because real field-measured
+    discharge (`find_calibration_pairs`) doesn't necessarily span this event's full
+    observed stage range.
+
+    Measured impact on the real May 2024 file: ANA's `Vazao` readings only cover
+    stages 14.11-33.66m, while the event's stage series spans 12.68-33.66m, so
+    279 of its 609 readings - 45.8%, the entire pre-flood lead-in below 14.11m -
+    are flat-clipped up to the curve's lowest calibrated discharge (2251.8 m3/s)
+    instead of the lower discharge those stages really carried. Nothing is clipped
+    at the top end (the curve reaches the peak stage exactly). The lead-in is
+    therefore modelled as a sustained base flow rather than a rising one; widening
+    the calibration window would need discharge data this station's feed does not
+    contain for that period. Known limitation, not a bug.
     """
     stages = np.array([p[0] for p in rating_curve])
     discharges = np.array([p[1] for p in rating_curve])

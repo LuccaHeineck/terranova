@@ -8,13 +8,28 @@ interface ConfigPanelProps {
   onStart: (params: SimulationParams) => void
 }
 
+// A seeded-pool run is a few hundred steps, so a frame every 5 is fine. A
+// gauge-driven run covers the whole real May 2024 event in 100k+ engine steps -
+// at an interval of 5 that would be tens of thousands of WebSocket frames, so it
+// defaults far coarser. Switching modes resets the field to that mode's default;
+// the user can still type any value afterwards.
+const DEFAULT_FRAME_INTERVAL: Record<'seeded_pool' | 'gauge_driven', number> = {
+  seeded_pool: 5,
+  gauge_driven: 500,
+}
+
 export function ConfigPanel({ status, onStart }: ConfigPanelProps) {
   const [mode, setMode] = useState<'seeded_pool' | 'gauge_driven'>('seeded_pool')
   const [steps, setSteps] = useState(200)
-  const [frameInterval, setFrameInterval] = useState(5)
+  const [frameInterval, setFrameInterval] = useState(DEFAULT_FRAME_INTERVAL.seeded_pool)
   const [outflowFraction, setOutflowFraction] = useState(0.5)
 
   const busy = status === 'starting' || status === 'streaming'
+
+  const selectMode = (next: 'seeded_pool' | 'gauge_driven') => {
+    setMode(next)
+    setFrameInterval(DEFAULT_FRAME_INTERVAL[next])
+  }
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault()
@@ -40,7 +55,7 @@ export function ConfigPanel({ status, onStart }: ConfigPanelProps) {
             name="mode"
             checked={mode === 'seeded_pool'}
             disabled={busy}
-            onChange={() => setMode('seeded_pool')}
+            onChange={() => selectMode('seeded_pool')}
           />
           Synthetic seeded pool
         </label>
@@ -50,7 +65,7 @@ export function ConfigPanel({ status, onStart }: ConfigPanelProps) {
             name="mode"
             checked={mode === 'gauge_driven'}
             disabled={busy}
-            onChange={() => setMode('gauge_driven')}
+            onChange={() => selectMode('gauge_driven')}
           />
           Real May 2024 event (gauge-driven)
         </label>
