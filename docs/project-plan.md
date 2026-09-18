@@ -319,6 +319,97 @@ elapsed-time mapping, only a real cell size from step 3").
   UI is step 9's job, not this one; `POST /simulations` and the WebSocket streaming loop still call
   `step()` with no `dt`/`inflow` argument, exactly as before this step.
 
+**Step 9 done.** The real May 2024 Taquari flood event (ANA/SGB gauge station `86879300`, Porto
+Fluvial de Estrela) now drives an open-system, gauge-driven run reachable through the actual app —
+`POST /simulations`/`WS /simulations/{run_id}/stream` and the frontend — not just through a Python
+script, closing the gap step 5/6/7/8 all deliberately left open.
+
+- **`backend/scripts/download_hydrograph.py`** (new): fetches the station's real 15-minute-ish
+  telemetric record from ANA's older, no-API-key `telemetria1ws` SOAP/ASMX service
+  (`DadosHidrometeorologicos` operation — the originally-planned `HidroSerieHistorica` operation
+  turned out to return a monthly transposed summary that silently dropped part of the requested
+  window; found via the service's live WSDL and corrected during implementation), saving the raw XML
+  unparsed to `data/raw/` — same network-only split as `download_dem.py`/`download_landcover.py`.
+  Covers `2024-04-27`–`2024-05-10` (610 rows), captured without needing to widen the window.
+- **`backend/ingestion/hydrograph.py`** (new) turns that raw record into a queryable discharge
+  `Hydrograph`:
+  - **Real-data pivot, deviating from the original plan's "research an external rating curve"
+    instruction**: the raw response turned out to carry a `Vazao` (discharge, m³/s) field directly
+    on a subset of rows, alongside `Nivel` (stage) — ANA's own real, already-computed discharge for
+    this exact station/event, not something worth independently researching from an external table.
+    `find_calibration_pairs` builds the rating curve empirically from those real (stage, discharge)
+    pairs (288 of them, spanning 14.11–33.66 m, strictly monotone once duplicate stages are
+    averaged); `stage_to_discharge` applies it via `np.interp`, which **clips to the nearest
+    calibrated endpoint outside that range rather than raising** (documented: 45.8% of the real
+    event's readings — the entire pre-flood lead-in below 14.11 m — get flat-clipped to the curve's
+    lowest calibrated discharge, 2251.8 m³/s, a known, recorded simplification rather than a
+    fabricated low-flow extrapolation).
+  - `find_boundary_inflow_mask`/`discharge_to_inflow` locate real river-channel cells on one ROI
+    boundary edge (from the real, already-processed `Z`) and convert a discharge value into the
+    per-cell depth-increment array `step()`'s `inflow` parameter expects.
+  - **Important correction, only caught by whole-branch review against the real DEM**: the edge
+    (`config.settings.HYDROGRAPH_INFLOW_EDGE`) was initially set to `"east"` using the heuristic
+    "the boundary edge with the highest minimum elevation is upstream" applied blindly across all
+    four ROI edges — but the Taquari channel only ever crosses this ROI's **north** and **south**
+    edges (channel-elevation cells, within 2 m of the 11.0 m global minimum, exist only there); east
+    and west are valley walls the river never touches, and east's "highest minimum" was a 2-cell dip
+    on a hillside ~15 m above the real channel bed. Corrected to `"north"` (real 9-cell channel mask,
+    columns 154–162) after independent verification against the real processed DEM. The heuristic
+    itself is now documented as valid only once restricted to edges that actually carry the channel.
+- **`backend/api/`**: `POST /simulations` gains a `mode` field (`"seeded_pool"`, unchanged default
+  behavior, vs. new `"gauge_driven"`, with a validator that makes `steps` required for one and
+  forbidden for the other). A `gauge_driven` request 503s cleanly if the hydrograph hasn't been
+  downloaded/loaded yet, without taking down `seeded_pool` mode — the lifespan loads the hydrograph
+  best-effort (catches any loading failure, not just a missing file, and leaves the app fully
+  functional for `seeded_pool` either way). The WebSocket loop's gauge-driven path calls
+  `compute_stable_dt` fresh every iteration (clamped to at most 900 s — the raw feed's own sample
+  spacing — since the engine's dry-grid 1-hour fallback is sized for redistribution stability, not
+  for sizing a single external-inflow injection; even with this clamp, the very first step's masked
+  cells receive ~250 depth-units, a still-large but now bounded and documented transient inherent to
+  pushing a whole river's discharge through 9 cells on a 30 m grid), interpolates the hydrograph's
+  discharge at the current elapsed time, converts it to `inflow`, and streams frames with two new
+  fields (`elapsed_time`, `cumulative_inflow`) so the frontend can show *why* volume is rising. The
+  conservation invariant (`H.sum() == cumulative_inflow`) is checked with a relative, not absolute,
+  tolerance — real cumulative inflow reaches order 1e7 over 100,000+ steps, where the old fixed
+  `1e-6` absolute bound could have been exceeded by ordinary float64 drift alone.
+- **`frontend/`**: `ConfigPanel` gets a mode toggle (seeded-pool keeps its `Steps` field; gauge-driven
+  drops it, since the hydrograph's own duration determines run length) that also switches the default
+  `frame_interval` (5 for seeded-pool, 500 for gauge-driven — a full gauge-driven run is tens of
+  thousands of engine steps, and streaming a frame every 5 of them would be impractical). The log
+  line gains an `elapsed=X.Xmin` note when present; the log array itself is capped to the most recent
+  200 lines so a long run doesn't grow it (and the DOM) unboundedly.
+- **Verified against real data throughout, not just synthetic fixtures**: the real gauge file was
+  really downloaded and parsed; the real DEM was really used to determine the upstream edge (twice —
+  once wrong, corrected after whole-branch review caught it against the same real file); a short real
+  gauge-driven run (tens of steps) was driven against a real running server, confirming mass
+  conservation exact to every printed digit, no negative depths, and the first-step depth transient
+  landing at the hand-calculated value. 50/50 backend tests passing; frontend `tsc`/`npm run build`
+  clean. No automated frontend test framework exists yet (unchanged, deferred per existing project
+  decision) — Task 5's own verification used real dev servers plus scripts replicating the frontend's
+  exact API calls, since no browser automation tool was available in that session; the final
+  whole-branch review independently read the React code for the runtime-behavior bug classes
+  (stale closures, wrong conditional operators) that check couldn't exercise, and found none.
+- **Known limitations, explicitly not addressed by this step**:
+  - **A full gauge-driven run has never been observed to completion end-to-end.** The real event
+    spans ~14 simulated days; measured wall-clock throughput (~50 real engine steps per ~1 minute
+    once the grid is wet, adaptive `dt` shrinking well below the 900 s cap) implies well over 100,000
+    engine steps and several hours of wall-clock time to reach `done` — expected per this project's
+    "no downsampling, no real-time throttling" design decision, but genuinely slow, and real
+    performance work (vectorization already exists; GPU exploration does not) is roadmap step 11's
+    job, not this one.
+  - **The gauge-driven WebSocket handler is CPU-bound with no yield points**: an in-flight run blocks
+    other API requests on the same worker, and an abandoned run keeps computing after the client
+    disconnects. Noticed during this step's verification; belongs with step 11's performance work.
+  - **The engine's closed-boundary, no-outlet design (pre-existing, predates this step) meets a real
+    14-day hydrograph for the first time here.** The real event's total inflow (~9.1e9 m³) into this
+    closed 183×192 basin implies a mean depth of ~288 m against a 96 m maximum terrain elevation over
+    a full run — i.e. the entire ROI eventually floods, since there is nowhere for water to leave.
+    This was always implied by the closed-boundary decision but had no real driving signal to surface
+    it until now. Step 10's CSI/RMSE validation against the real observed May 2024 flood extent cannot
+    be meaningful without deliberately addressing this first (an outlet boundary condition, or
+    validating only against an early/partial window of the real run) — flagged here for step 10 to
+    take up explicitly, not silently discovered during that step's own work.
+
 To run the CA-engine PoC directly (bare-metal, unrelated to Docker): `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 
 To run the full containerized stack: `docker compose up --build` from the repo root, then open `http://localhost:5173`.
@@ -334,35 +425,38 @@ backend/
   requirements.txt   # numpy, matplotlib, fastapi, uvicorn, pytest, httpx2, rasterio, requests, python-dotenv
   simulation/
     __init__.py
-    engine.py         # core CA step function + seed_pool_at_lowest_point — pure NumPy, no I/O, no geodata
+    engine.py         # core CA step, compute_stable_dt, seed_pool_at_lowest_point — pure NumPy, no I/O
   examples/
     __init__.py
     poc_grid.py        # small artificial-grid demo: fake terrain, pool of water, run N steps, plot/check
-    poc_real_dem.py     # same idea, on the real Lajeado/Estrela elevation matrix (step 3)
+    poc_real_dem.py     # same idea, on the real Lajeado/Estrela elevation matrix (step 3), + real dt (step 8)
   api/
     __init__.py
-    main.py             # FastAPI() app, lifespan loads Z/N once, includes routers (step 5)
-    state.py            # holds loaded Z/N, exposed as overridable FastAPI dependencies (step 5)
+    main.py             # FastAPI() app, lifespan loads Z/N/bounds/hydrograph (best-effort), includes routers
+    state.py            # holds loaded Z/N/bounds/hydrograph/inflow_mask, overridable FastAPI dependencies
     routers/
       __init__.py
       health.py         # GET /health -> {"status": "ok"}
-      simulations.py    # POST /simulations, WS /simulations/{run_id}/stream (step 5)
+      simulations.py    # POST /simulations, WS /simulations/{run_id}/stream — seeded_pool + gauge_driven modes
   ingestion/
     __init__.py
     dem.py              # raw GeoTIFF -> reproject -> crop -> sink-fill -> Z array (step 3)
     landcover.py         # raw MapBiomas GeoTIFF -> align to Z's grid -> Manning's-n lookup -> N array (step 4)
+    hydrograph.py         # raw ANA XML -> real rating curve -> Hydrograph + boundary inflow mask (step 9)
   config/
     __init__.py
-    settings.py         # ROI bbox, DEM/land-cover source/CRS/resolution, data paths, API key loading
+    settings.py         # ROI bbox, DEM/land-cover/hydrograph source/CRS/resolution, data paths, API keys
   scripts/
     __init__.py
     download_dem.py      # CLI: fetch the raw DEM tile from OpenTopography into data/raw/
     download_landcover.py # CLI: fetch the raw MapBiomas land-cover clip into data/raw/
+    download_hydrograph.py # CLI: fetch the raw ANA gauge record for station 86879300 into data/raw/ (step 9)
   tests/
     __init__.py
     test_engine.py
     test_ingestion.py
     test_landcover.py
+    test_hydrograph.py
     test_api.py
 frontend/
   package.json        # react, react-dom, leaflet, tailwindcss/@tailwindcss/vite (npm, TypeScript, Vite)
@@ -371,7 +465,7 @@ frontend/
     main.tsx              # imports leaflet.css + index.css (Tailwind), renders <App/>
     App.tsx                # 3-column layout: ConfigPanel | FloodMap | LogPanel
     index.css                # @import "tailwindcss";
-    types/simulation.ts        # TS mirror of the backend JSON contract (incl. Bounds)
+    types/simulation.ts        # TS mirror of the backend JSON contract (incl. Bounds, mode, elapsed_time)
     api/
       config.ts                 # API_BASE_URL / WS_BASE_URL (VITE_API_BASE_URL, default localhost:8000)
       client.ts                  # createSimulation() -> POST /simulations
@@ -381,14 +475,14 @@ frontend/
     rendering/
       depthToImage.ts               # depth[][] -> canvas data URL, orange-red ramp (transparent at 0 depth)
     components/
-      ConfigPanel.tsx                # steps/frame_interval/outflow_fraction form
+      ConfigPanel.tsx                # mode toggle + steps/frame_interval/outflow_fraction form (step 9)
       FloodMap.tsx                    # plain Leaflet + OSM tiles + L.ImageOverlay, positioned via API bounds
-      LogPanel.tsx                     # status/grid_shape/bounds + scrolling step/volume log + error banner
+      LogPanel.tsx                     # status/grid_shape/bounds + scrolling step/volume/elapsed log + errors
 ```
 
-`validation/` still exists as an empty, README-documented placeholder — no code yet, added in step 8.
+`validation/` still exists as an empty, README-documented placeholder — no code yet, activates step 10.
 `data/raw/` and `data/processed/` now hold real (gitignored) files once `download_dem.py`/
-`download_landcover.py` and the ingestion pipelines have been run locally.
+`download_landcover.py`/`download_hydrograph.py` and the ingestion pipelines have been run locally.
 
 ## Engine design notes (steps 1-2)
 
@@ -414,8 +508,8 @@ First version (deliberately simpler than the TCC's full documented model): redis
 6. **React + Vite + Leaflet frontend** *(done)* — config panel, live map overlay fed by the WebSocket stream, log/metrics panel (loosely following the Figure 12 mockup from the TCC).
 7. **Docker Compose** *(done)* — containerize backend + frontend + static data volume.
 8. **Real timestep (`dt`) derivation** *(done)* — `compute_stable_dt` derives a real `dt` from Manning flow velocities under a CFL-style stability condition, using the real `dx = 30m` cell size already established in step 3. See "Step 8 done" above for the full design (source-cell velocity convention, adaptive recomputation, the `dt ∝ dx^(3/2)` identity, and the zero-velocity fallback).
-9. **Real driving hydrograph, wired end-to-end** *(current step)* — download the ANA/SGB gauge station `86879300` (Porto Fluvial de Estrela) 15-minute river-level record for the May 2024 event via the Hidroweb API, convert it into a time-varying `inflow` series using step 8's `dt`, and — unlike the engine-only `inflow` capability added ahead of schedule (see "Current status" above) — actually thread it through: `POST /simulations`/the WebSocket streaming loop in `backend/api/routers/simulations.py`, and the frontend (`ConfigPanel`/`LogPanel` need to reflect an open-system run, since volume will grow instead of staying flat). Only once this step is done can a user run a real, gauge-driven event through the actual app, not just through a Python script.
-10. **CSI/RMSE validation against real events** — ingest SGB/CPRM's stage-indexed flood-extent shapefiles (and HWM/SWOT ground truth where available) for the 2023/2024 events, and implement CSI (spatial overlap between simulated and observed flooded extent) and RMSE (depth, where ground-truth depth exists) in the already-scaffolded `validation/` module.
+9. **Real driving hydrograph, wired end-to-end** *(done)* — the real May 2024 ANA/SGB gauge record for station `86879300` now drives an open-system `gauge_driven` mode reachable through `POST /simulations`/the WebSocket stream and the frontend's mode toggle. See "Step 9 done" above for the full design (the real-`Vazao`-instead-of-researched-curve pivot, the boundary-inflow-edge correction, the dt-clamp/tolerance fixes, and the known limitations — no full run observed to completion yet, no outlet boundary, event-loop blocking — carried forward to steps 10/11 below).
+10. **CSI/RMSE validation against real events** *(current step)* — ingest SGB/CPRM's stage-indexed flood-extent shapefiles (and HWM/SWOT ground truth where available) for the 2023/2024 events, and implement CSI (spatial overlap between simulated and observed flooded extent) and RMSE (depth, where ground-truth depth exists) in the already-scaffolded `validation/` module. **Must first deliberately address step 9's closed-boundary/no-outlet limitation** (a full gauge-driven run floods the entire ROI at ~288m mean depth against a 96m max terrain elevation) — CSI against the real observed extent is not meaningful otherwise.
 11. **Performance benchmarking** — vectorized NumPy vs. loop-based comparison, exploratory CuPy/GPU, run against the real event replay from steps 9–10.
 
 Update the "Current status" section above as steps complete — this file is meant to be read at the start of future sessions instead of re-deriving the plan from scratch.

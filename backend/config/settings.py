@@ -5,6 +5,7 @@ Pure settings module - no imports from `simulation/`, `ingestion/`, or `api/` (s
 """
 
 import os
+from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -52,6 +53,62 @@ LANDCOVER_RAW_PATH = RAW_DIR / "lajeado_estrela_landcover.tif"
 LANDCOVER_PROCESSED_PATH = PROCESSED_DIR / "lajeado_estrela_n.tif"
 
 OPENTOPOGRAPHY_API_URL = "https://portal.opentopography.org/API/globaldem"
+
+# ANA/SGB fluviometric gauge station 86879300, Porto Fluvial de Estrela (Taquari
+# river) - inside this project's own ROI. Feeds roadmap step 9's gauge-driven
+# hydrograph.
+HYDROGRAPH_STATION_CODE = "86879300"
+
+# The May 2024 RS flood event window at this station, with a few days of lead-in
+# before the rise and past the peak/initial recession. Verify against the real
+# downloaded series in Task 1, Step 3 below - if the series is clipped mid-rise
+# or mid-recession, widen these and re-run download_hydrograph.py.
+HYDROGRAPH_EVENT_START = datetime(2024, 4, 27)
+HYDROGRAPH_EVENT_END = datetime(2024, 5, 10)
+
+# ANA's older SOAP/ASMX telemetry service - no API key required, unlike the
+# newer OAuth-based hidrowebservice (which requires emailing hidro@ana.gov.br
+# for access; see https://www.ana.gov.br/hidrowebservice/manual). Confirmed
+# live 2026-09-16.
+#
+# NOTE: this is the `DadosHidrometeorologicos` operation, not
+# `HidroSerieHistorica` (an earlier draft of this constant pointed there).
+# HidroSerieHistorica returns ANA's monthly *conventional-station* summary
+# table (one row per fixed reading-hour-of-day, with Cota01..Cota31 columns
+# holding that hour's value for each day of the month) - not a real
+# timestamped series, and for this station/window it silently dropped the
+# April rows entirely. DadosHidrometeorologicos returns actual irregular
+# sub-hourly telemetric readings (CodEstacao/DataHora/Vazao/Nivel/Chuva per
+# row) and covers the full requested window exactly - see
+# `scripts/download_hydrograph.py`'s docstring and `ingestion/hydrograph.py`'s
+# header comment (Task 2) for the verified schema details.
+ANA_TELEMETRIA_URL = "https://telemetriaws1.ana.gov.br/ServiceANA.asmx/DadosHidrometeorologicos"
+
+HYDROGRAPH_RAW_PATH = RAW_DIR / "estrela_stage_may2024.xml"
+
+# Which ROI boundary edge the river enters from upstream. Determined empirically
+# from the real processed Z, in two stages - BOTH matter, and skipping the first
+# one is what made an earlier revision of this constant wrong:
+#
+#   1. Restrict to the edges the channel actually crosses. Taking the real DEM's
+#      global minimum (11.0m) as the channel bed and `find_boundary_inflow_mask`'s
+#      +2.0m margin as "channel elevation", only two edges carry channel cells:
+#        north  min=12.0m  -> 8 cells at or below 13.0m (columns 155-162)
+#        south  min=11.0m  -> 9 cells at or below 13.0m (columns 48-56)
+#        west   min=23.0m  -> 0 channel cells (valley wall)
+#        east   min=26.0m  -> 0 channel cells (valley wall)
+#      The Taquari enters this ROI on the north edge and leaves on the south; the
+#      west and east edges are hillsides it never reaches.
+#   2. Of those channel-crossing edges only, the one with the HIGHER minimum is
+#      upstream (water runs downhill along the channel toward the opposite edge):
+#      north (12.0m) > south (11.0m), so north is upstream.
+#
+# An earlier revision applied rule 2 alone across all four edges and picked
+# "east" - whose 26.0m "minimum" is a 2-cell dip on a hillside sitting ~14m above
+# the real channel bed, not the river at all. If the ROI above is ever changed,
+# re-run both stages against the newly processed Z; rule 2 on its own is only
+# meaningful once rule 1 has thrown out the edges the channel never crosses.
+HYDROGRAPH_INFLOW_EDGE = "north"
 
 CORS_ALLOWED_ORIGINS = os.environ.get(
     "CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"

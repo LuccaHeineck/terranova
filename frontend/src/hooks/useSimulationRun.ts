@@ -5,6 +5,9 @@ import type { Bounds, SimulationFrame, SimulationParams } from '../types/simulat
 
 export type SimulationStatus = 'idle' | 'starting' | 'streaming' | 'done' | 'error'
 
+/** Most recent log lines kept in memory (and rendered); older ones are dropped. */
+const MAX_LOG_LINES = 200
+
 export function useSimulationRun() {
   const [status, setStatus] = useState<SimulationStatus>('idle')
   const [gridShape, setGridShape] = useState<[number, number] | null>(null)
@@ -30,7 +33,15 @@ export function useSimulationRun() {
       closeStreamRef.current = openSimulationStream(created.run_id, {
         onFrame: (frame) => {
           setLatestFrame(frame)
-          setLog((prev) => [...prev, `step ${frame.step}: volume=${frame.volume.toFixed(4)}`])
+          const elapsedNote =
+            frame.elapsed_time !== undefined ? `, elapsed=${(frame.elapsed_time / 60).toFixed(1)}min` : ''
+          // Capped at MAX_LOG_LINES: a gauge-driven run emits tens of thousands of
+          // frames, and an uncapped array is both copied in full on every frame and
+          // rendered one <li> per entry by LogPanel.
+          setLog((prev) => [
+            ...prev.slice(-(MAX_LOG_LINES - 1)),
+            `step ${frame.step}: volume=${frame.volume.toFixed(4)}${elapsedNote}`,
+          ])
         },
         onDone: () => setStatus('done'),
         onError: (message) => {
