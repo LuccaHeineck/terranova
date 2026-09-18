@@ -1,5 +1,6 @@
 export interface SimulationParams {
-  steps: number
+  mode?: 'seeded_pool' | 'gauge_driven'
+  steps?: number
   frame_interval: number
   outflow_fraction?: number
 }
@@ -21,6 +22,8 @@ export interface SimulationFrame {
   step: number
   depth: number[][]
   volume: number
+  elapsed_time?: number
+  cumulative_inflow?: number
 }
 
 export interface SimulationDone {
