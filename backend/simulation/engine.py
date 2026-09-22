@@ -4,11 +4,14 @@ Each cell holds a static terrain elevation (Z), a dynamic water depth (H),
 and a static Manning roughness coefficient (N). `step` advances H by one
 discrete iteration: water moves from each cell to its 8 Moore neighbors,
 weighted by slope and by the roughness of the neighbor being flowed into,
-never uphill. The grid is closed by default (nothing enters or leaves,
-mass conserved exactly) but can be made an open system via `step`'s
-optional `inflow` source term (e.g. boundary inflow standing in for
-upstream river discharge), in which case volume grows by exactly the
-injected amount each step instead of staying constant.
+never uphill. The grid is closed and walled on all sides by default (nothing
+enters or leaves, mass conserved exactly) but can be made an open system via
+`step`'s optional `inflow` source term (e.g. boundary inflow standing in for
+upstream river discharge, in which case volume grows by exactly the injected
+amount each step instead of staying constant) and/or its optional
+`boundary_elevation`/`boundary_roughness` parameters, which turn specific
+boundary cells into a real outlet water can permanently leave through instead
+of a wall.
 
 This module has no I/O and no geodata dependency on purpose - it operates
 on plain NumPy arrays so it can be validated on small synthetic grids
@@ -84,6 +87,8 @@ def step(
     N: np.ndarray,
     outflow_fraction: float = 0.5,
     inflow: np.ndarray | None = None,
+    boundary_elevation: np.ndarray | None = None,
+    boundary_roughness: np.ndarray | None = None,
 ) -> np.ndarray:
     """Advance the water depth grid H by one discrete time step.
 
@@ -102,14 +107,39 @@ def step(
     Roughness only steers *where* the capped outflow goes, not *how much*
     leaves the cell - see `docs/project-plan.md`'s step 2 notes for why.
 
-    The grid is closed (no rain/infiltration) by default. `inflow`, if
-    given, is a per-cell external source term (e.g. a boundary inflow
-    standing in for upstream river discharge) added to H once after the
-    redistribution above - newly-arrived water starts redistributing on the
-    *next* step rather than mid-step, an explicit simplification of the same
-    kind as the substep decomposition. With `inflow`, total volume is no
+    The grid is closed (no rain/infiltration) and walled on all four sides by
+    default (`Z` is padded with `+inf`, so no real cell ever has a downhill
+    neighbor across the boundary - see `boundary_elevation` below to change
+    this). `inflow`, if given, is a per-cell external source term (e.g. a
+    boundary inflow standing in for upstream river discharge) added to H once
+    after the redistribution above - newly-arrived water starts redistributing
+    on the *next* step rather than mid-step, an explicit simplification of the
+    same kind as the substep decomposition. With `inflow`, total volume is no
     longer conserved outright: it grows by exactly `inflow.sum()` per step,
     which is still exactly checkable rather than merely approximate.
+
+    `boundary_elevation`/`boundary_roughness`, if given, replace the default
+    all-wall padded `Z`/`N` arrays outright (shape `(rows+2, cols+2)`, i.e.
+    `H`'s shape plus one cell of padding on every side) - this is how a caller
+    can turn specific boundary cells into a real outlet instead of a wall:
+    where the override elevation is lower than a real interior cell's water
+    surface, water flows toward it exactly like any other downhill neighbor
+    through the same weighted-redistribution math, and (since `_single_update`
+    already only returns the *cropped* interior of its scratch padding array -
+    true even in the unmodified default case, it just never mattered before
+    because a `+inf` wall never receives outflow) that water simply leaves the
+    tracked domain rather than bouncing back. When omitted, behavior is
+    byte-identical to a plain `np.pad(Z, 1, constant_values=np.inf)`/
+    `np.pad(N, 1, constant_values=1.0)` wall on every side, exactly as before
+    this parameter existed. With an outlet, total volume is no longer
+    conserved *or* simply additive: a caller can still get an exact invariant
+    by bookkeeping the difference itself -
+    `outflow_this_step = H_before.sum() + inflow.sum() - H_after.sum()` - since
+    `step()`'s return value already reflects whatever left through the outlet;
+    no separate return value is needed. See `docs/tcc-deviations.md` for why
+    this extension exists (TCC1's base model is otherwise fully closed) and
+    `ingestion/hydrograph.py`'s boundary-outlet builder for how the real ROI's
+    override arrays are actually constructed from the DEM.
     """
     if not (0 < outflow_fraction <= 1):
         raise ValueError("outflow_fraction must be in (0, 1]")
@@ -120,6 +150,14 @@ def step(
             raise ValueError("inflow must have the same shape as H")
         if np.any(inflow < 0):
             raise ValueError("inflow must be non-negative everywhere")
+    padded_shape = (H.shape[0] + 2, H.shape[1] + 2)
+    if boundary_elevation is not None and boundary_elevation.shape != padded_shape:
+        raise ValueError(f"boundary_elevation must have shape {padded_shape} (H's shape padded by 1)")
+    if boundary_roughness is not None:
+        if boundary_roughness.shape != padded_shape:
+            raise ValueError(f"boundary_roughness must have shape {padded_shape} (H's shape padded by 1)")
+        if np.any(boundary_roughness <= 0):
+            raise ValueError("boundary_roughness must be strictly positive everywhere")
 
     n_substeps = math.ceil(outflow_fraction / _MAX_STABLE_SUBSTEP_FRACTION)
     # Per-substep fraction chosen so that n_substeps of sequential depletion
@@ -127,11 +165,18 @@ def step(
     # outflow_fraction would (1 - (1 - f) = compounding decay identity).
     substep_fraction = 1 - (1 - outflow_fraction) ** (1 / n_substeps)
 
-    Zp = np.pad(Z, 1, mode="constant", constant_values=np.inf)
-    # Boundary N value is physically irrelevant - boundary weights are always
-    # multiplied by drop=0 since no real cell exceeds the +inf-padded wall -
-    # but must be positive to avoid 0 * inf = nan corrupting the array.
-    Np = np.pad(N, 1, mode="constant", constant_values=1.0)
+    if boundary_elevation is not None:
+        Zp = boundary_elevation
+    else:
+        Zp = np.pad(Z, 1, mode="constant", constant_values=np.inf)
+    if boundary_roughness is not None:
+        Np = boundary_roughness
+    else:
+        # Boundary N value is physically irrelevant for a wall - boundary
+        # weights are always multiplied by drop=0 since no real cell exceeds
+        # the +inf-padded wall - but must be positive to avoid 0 * inf = nan
+        # corrupting the array.
+        Np = np.pad(N, 1, mode="constant", constant_values=1.0)
     for _ in range(n_substeps):
         H = _single_update(Zp, Np, H, substep_fraction)
     if inflow is not None:

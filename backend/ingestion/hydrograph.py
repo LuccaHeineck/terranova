@@ -34,8 +34,10 @@ edge from the terrain `Z` itself (the gauge's own coordinates sit inside the
 ROI, not on a boundary), the latter splits a discharge over `dt_seconds`
 uniformly across those cells.
 
-Reads from `data/raw/`. Depends on `config/` for paths. No CA logic here, no
-imports from `simulation/` - see `docs/ARCHITECTURE.md`.
+Reads from `data/raw/`. Depends on `config/` for paths and `ingestion.landcover`
+for its `MANNING_N_BY_CLASS` water-roughness value (`find_boundary_outlet`
+below). No CA logic here, no imports from `simulation/` - see
+`docs/ARCHITECTURE.md`.
 """
 
 from dataclasses import dataclass
@@ -46,6 +48,7 @@ from xml.etree import ElementTree
 import numpy as np
 
 from config import settings
+from ingestion.landcover import MANNING_N_BY_CLASS
 
 
 def _read_rows(raw_path: Path) -> list[ElementTree.Element]:
@@ -208,6 +211,65 @@ def find_boundary_inflow_mask(
     else:
         mask[:, -1] = channel
     return mask
+
+
+def find_boundary_outlet(
+    Z: np.ndarray,
+    N: np.ndarray,
+    edge: str,
+    margin_m: float = _CHANNEL_ELEVATION_MARGIN_METERS,
+    drop_m: float = _CHANNEL_ELEVATION_MARGIN_METERS,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build the `boundary_elevation`/`boundary_roughness` override arrays
+    `simulation.engine.step` expects, turning one ROI boundary `edge`'s real
+    channel cells (found via the same heuristic `find_boundary_inflow_mask`
+    uses) into an outlet water can actually leave the domain through, instead
+    of reflecting off the default `+inf` wall.
+
+    Only the channel cells on `edge` become an outlet - every other boundary
+    cell (including the rest of that same edge) stays a wall, since the river
+    is the only place real water should be able to exit a closed ROI.
+
+    The outlet's "virtual outside" elevation is each channel cell's own real
+    elevation minus `drop_m` (defaults to the same `_CHANNEL_ELEVATION_MARGIN_METERS`
+    already used to define "channel-scale" elevation differences elsewhere in
+    this module) - a small, physically modest continuation of the channel
+    bed past the ROI's edge, not an arbitrary new constant. A fixed margin
+    below the cell's own elevation was chosen over extrapolating the observed
+    slope from the last one or two interior cells: sink-filled real DEM data
+    only guarantees *some* monotonic downhill path to the border exists, not
+    that any two specific adjacent cells along one column/row are themselves
+    monotonic, so a local two-cell gradient risks being noisy or even
+    uphill - a fixed margin is simpler and robust to that.
+
+    Outlet roughness reuses `MANNING_N_BY_CLASS`'s water value, not the wall's
+    physically-irrelevant `1.0` placeholder, since real water actually flows
+    through these cells now.
+    """
+    mask = find_boundary_inflow_mask(Z, edge, margin_m)
+
+    boundary_elevation = np.pad(Z, 1, mode="constant", constant_values=np.inf)
+    boundary_roughness = np.pad(N, 1, mode="constant", constant_values=1.0)
+    water_n = MANNING_N_BY_CLASS[33]  # River, Lake and Ocean / water
+
+    if edge == "north":
+        channel = mask[0, :]
+        boundary_elevation[0, 1:-1][channel] = Z[0, :][channel] - drop_m
+        boundary_roughness[0, 1:-1][channel] = water_n
+    elif edge == "south":
+        channel = mask[-1, :]
+        boundary_elevation[-1, 1:-1][channel] = Z[-1, :][channel] - drop_m
+        boundary_roughness[-1, 1:-1][channel] = water_n
+    elif edge == "west":
+        channel = mask[:, 0]
+        boundary_elevation[1:-1, 0][channel] = Z[:, 0][channel] - drop_m
+        boundary_roughness[1:-1, 0][channel] = water_n
+    else:
+        channel = mask[:, -1]
+        boundary_elevation[1:-1, -1][channel] = Z[:, -1][channel] - drop_m
+        boundary_roughness[1:-1, -1][channel] = water_n
+
+    return boundary_elevation, boundary_roughness
 
 
 def discharge_to_inflow(

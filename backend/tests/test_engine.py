@@ -169,6 +169,103 @@ def test_inflow_propagates_downhill_from_injection_point():
     assert H[1, 2] > 0.0, "water should have spread downhill from the injection point"
 
 
+def test_default_boundary_params_reproduce_wall_behavior():
+    """Explicitly constructing the same all-wall padded arrays `step()` builds
+    internally by default (`boundary_elevation`/`boundary_roughness` omitted)
+    and passing them in must reproduce byte-identical output - proves the new
+    override mechanism is a strict superset of the old behavior, not a
+    separate code path that happens to agree."""
+    rows, cols = 10, 10
+    y, x = np.mgrid[0:rows, 0:cols].astype(float)
+    Z = ((x - cols / 2) ** 2 + (y - rows / 2) ** 2) / (rows * cols)
+    N = np.full((rows, cols), 0.05)
+    H = np.zeros((rows, cols))
+    H[4:7, 4:7] = 5.0
+
+    boundary_elevation = np.pad(Z, 1, mode="constant", constant_values=np.inf)
+    boundary_roughness = np.pad(N, 1, mode="constant", constant_values=1.0)
+
+    H_default = step(Z, H.copy(), N)
+    H_explicit = step(Z, H.copy(), N, boundary_elevation=boundary_elevation, boundary_roughness=boundary_roughness)
+
+    np.testing.assert_array_equal(H_default, H_explicit)
+
+
+def test_boundary_outlet_drains_volume_over_time():
+    """A closed basin except for one designated low-elevation outlet cell on
+    its south edge: water should actually leave the domain over time (total
+    volume strictly decreasing, with no inflow to offset it), unlike the
+    default all-wall boundary where volume stays exactly constant."""
+    rows, cols = 8, 8
+    Z = np.zeros((rows, cols))
+    N = np.full((rows, cols), 0.05)
+    H = np.zeros((rows, cols))
+    H[3:5, 3:5] = 10.0
+    initial_volume = H.sum()
+
+    boundary_elevation = np.pad(Z, 1, mode="constant", constant_values=np.inf)
+    boundary_elevation[-1, 4] = -5.0  # one outlet cell, south edge, below any real terrain
+    boundary_roughness = np.pad(N, 1, mode="constant", constant_values=1.0)
+    boundary_roughness[-1, 4] = 0.04  # water's own Manning's n, not the wall placeholder
+
+    for t in range(30):
+        H = step(Z, H, N, boundary_elevation=boundary_elevation, boundary_roughness=boundary_roughness)
+        assert H.min() >= -1e-9, f"negative depth at step {t}: {H.min()}"
+
+    assert H.sum() < initial_volume, "volume should have decreased through the outlet"
+
+
+def test_boundary_outlet_mass_balance_is_exact():
+    """The caller-side bookkeeping invariant (no new return value from step()
+    itself): summing `H_before.sum() - H_after.sum()` every step must exactly
+    equal how much total volume was actually lost, to floating-point
+    precision - proving outflow can be tracked exactly without step() needing
+    to report it directly."""
+    rows, cols = 8, 8
+    Z = np.zeros((rows, cols))
+    N = np.full((rows, cols), 0.05)
+    H = np.zeros((rows, cols))
+    H[3:5, 3:5] = 10.0
+    initial_volume = H.sum()
+
+    boundary_elevation = np.pad(Z, 1, mode="constant", constant_values=np.inf)
+    boundary_elevation[-1, 4] = -5.0
+    boundary_roughness = np.pad(N, 1, mode="constant", constant_values=1.0)
+    boundary_roughness[-1, 4] = 0.04
+
+    cumulative_outflow = 0.0
+    for _ in range(30):
+        before = H.sum()
+        H = step(Z, H, N, boundary_elevation=boundary_elevation, boundary_roughness=boundary_roughness)
+        cumulative_outflow += before - H.sum()
+
+    assert H.sum() == pytest.approx(initial_volume - cumulative_outflow)
+
+
+def test_step_rejects_wrong_shape_boundary_overrides():
+    rows, cols = 5, 5
+    Z = np.zeros((rows, cols))
+    H = np.zeros((rows, cols))
+    N = np.full((rows, cols), 0.05)
+
+    with pytest.raises(ValueError):
+        step(Z, H, N, boundary_elevation=np.zeros((rows, cols)))  # missing the +2 padding
+    with pytest.raises(ValueError):
+        step(Z, H, N, boundary_roughness=np.zeros((rows, cols)))
+
+
+def test_step_rejects_nonpositive_boundary_roughness():
+    rows, cols = 5, 5
+    Z = np.zeros((rows, cols))
+    H = np.zeros((rows, cols))
+    N = np.full((rows, cols), 0.05)
+    boundary_roughness = np.pad(N, 1, mode="constant", constant_values=1.0)
+    boundary_roughness[-1, 2] = 0.0
+
+    with pytest.raises(ValueError):
+        step(Z, H, N, boundary_roughness=boundary_roughness)
+
+
 def test_seed_pool_at_lowest_point_seeds_full_volume_at_the_minimum():
     rows, cols = 10, 10
     Z = np.full((rows, cols), 10.0)

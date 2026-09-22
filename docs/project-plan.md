@@ -410,6 +410,50 @@ script, closing the gap step 5/6/7/8 all deliberately left open.
     validating only against an early/partial window of the real run) — flagged here for step 10 to
     take up explicitly, not silently discovered during that step's own work.
 
+**Outlet boundary condition added (ahead of step 10, resolving the limitation flagged just above).**
+Testing the "partial time window" mitigation directly (a real, complete run through the actual May 2024
+flood peak, at 90m resolution) found it doesn't work: the entire ROI is already flooded to a mean depth
+of 113.88m / max 147.27m by day 5.56 of the 14-day event — well before the peak, let alone the full
+run. That left the other mitigation, an actual outlet, as the real fix:
+- `simulation.engine.step` gained two new optional parameters, `boundary_elevation`/`boundary_roughness`
+  (full padded-shape overrides of the default all-wall boundary). Omitting both reproduces the original
+  behavior exactly (regression-tested) — a strict, backward-compatible superset of `step()`'s contract,
+  the same pattern as the existing `inflow` parameter. Water flows toward a lower "virtual outside"
+  elevation exactly like any other downhill neighbor, through the existing weighted-redistribution math
+  — no new redistribution logic needed, since `_single_update` already silently discards whatever
+  reaches the padding; it just never happened before because a `+inf` wall is never downhill.
+- **`ingestion.hydrograph.find_boundary_outlet`** (new) builds the real override arrays: the outlet
+  sits on the south edge's channel cells (reusing `find_boundary_inflow_mask`, the same heuristic
+  already used for the north inflow edge), with each outlet cell's "virtual outside" elevation set to
+  its own real elevation minus a fixed margin (reusing `_CHANNEL_ELEVATION_MARGIN_METERS`, not a new
+  constant) rather than extrapolating a local two-cell slope — real sink-filled DEM data only
+  guarantees *some* monotonic downhill path to the border exists, not that any two specific adjacent
+  cells are themselves monotonic, so a local gradient risked being noisy or backwards. New config:
+  `HYDROGRAPH_OUTLET_EDGE = "south"`.
+- **Exact accounting, not approximate**: the new conserved invariant (`final == initial +
+  cumulative_inflow - cumulative_outflow`) is derived by `_run_gauge_driven` via volume bookkeeping
+  around each `step()` call (`outflow_this_step = H_before.sum() + inflow.sum() - H_after.sum()`) — no
+  change to `step()`'s return signature was needed. `cumulative_outflow` is now streamed alongside
+  `cumulative_inflow` in each gauge-driven frame.
+- **`_run_seeded_pool` (closed-system mode) is deliberately unchanged** — it doesn't use the outlet, so
+  its own exact-conservation invariant (`H.sum() == initial_volume`) keeps holding as before.
+- See `docs/tcc-deviations.md` section 11 for the full comparison-to-TCC1 writeup.
+- **Real verification, confirmed — this actually works.** A complete run through the real May 2024
+  peak (90m resolution, same grid/hydrograph/edge as the earlier no-outlet run) with the outlet wired
+  in: **max depth 16.43m and 449 of 3,904 cells flooded (~11.5% of the ROI)**, against the no-outlet
+  run's 147.27m max / entire grid flooded. The flood stays localized along the river channel instead of
+  swallowing the whole basin — the actual point of this fix, confirmed with real numbers, not assumed.
+  Mass balance held exactly: cumulative inflow 444,592.2, cumulative outflow 442,354.5, final volume
+  2,237.6 (444,592.2 − 442,354.5 = 2,237.7, matching to printed precision).
+  - **Unexpected bonus: this is also dramatically faster.** 82,933 steps / 23.1 minutes to reach the
+    peak, vs. the no-outlet run's 403,554 steps / 1.92 hours for the same point — a further ~5x speedup
+    *on top of* the 90m resolution change, and not something this fix was even trying to achieve. A
+    closed, over-filling basin builds increasingly extreme depth/velocity gradients everywhere as it
+    backs up, which is exactly what forces `compute_stable_dt`'s adaptive step ever smaller; a system
+    that can actually drain never builds up that pathological state, so far fewer, larger steps are
+    needed for the same real-time span. Correctness and performance turned out to be the same fix here,
+    not a tradeoff.
+
 To run the CA-engine PoC directly (bare-metal, unrelated to Docker): `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 
 To run the full containerized stack: `docker compose up --build` from the repo root, then open `http://localhost:5173`.
