@@ -1,9 +1,11 @@
 import math
+from unittest import mock
 
 import numpy as np
 import pytest
 
-from simulation.engine import compute_stable_dt, seed_pool_at_lowest_point, step
+import simulation.engine as engine
+from simulation.engine import compute_stable_dt, outflow_fraction_for_dt, seed_pool_at_lowest_point, step
 
 
 def test_mass_conservation_and_nonnegative_depth():
@@ -402,3 +404,176 @@ def test_compute_stable_dt_rejects_nonpositive_roughness():
 
     with pytest.raises(ValueError):
         compute_stable_dt(Z, H, N, dx=30.0)
+
+
+def test_outflow_fraction_for_dt_returns_full_value_when_dt_equals_dt_cfl():
+    """The calibration anchor: dt == dt_cfl must reproduce outflow_fraction
+    exactly (today's byte-identical behavior in the uncapped/CFL-bound regime),
+    not just approximately."""
+    assert outflow_fraction_for_dt(0.5, dt=17.79, dt_cfl=17.79) == 0.5
+
+
+def test_outflow_fraction_for_dt_scales_down_proportionally_when_dt_is_smaller_than_dt_cfl():
+    result = outflow_fraction_for_dt(0.5, dt=0.25 * 900.0, dt_cfl=900.0)
+    assert result == pytest.approx(0.25 * 0.5)
+
+
+def test_outflow_fraction_for_dt_clamps_to_full_value_when_dt_exceeds_dt_cfl():
+    """Defensive case: dt shouldn't normally exceed dt_cfl (it's derived as a
+    bound on dt), but if it does, the result must not exceed the requested
+    outflow_fraction."""
+    assert outflow_fraction_for_dt(0.5, dt=200.0, dt_cfl=100.0) == 0.5
+
+
+def test_outflow_fraction_for_dt_stays_strictly_positive_for_a_very_small_dt_ratio():
+    result = outflow_fraction_for_dt(0.5, dt=1e-12, dt_cfl=1.0)
+    assert result > 0.0
+
+
+def test_outflow_fraction_for_dt_rejects_invalid_outflow_fraction():
+    with pytest.raises(ValueError):
+        outflow_fraction_for_dt(0.0, dt=1.0, dt_cfl=1.0)
+    with pytest.raises(ValueError):
+        outflow_fraction_for_dt(1.5, dt=1.0, dt_cfl=1.0)
+
+
+def test_outflow_fraction_for_dt_rejects_nonpositive_dt():
+    with pytest.raises(ValueError):
+        outflow_fraction_for_dt(0.5, dt=0.0, dt_cfl=1.0)
+    with pytest.raises(ValueError):
+        outflow_fraction_for_dt(0.5, dt=-1.0, dt_cfl=1.0)
+
+
+def test_outflow_fraction_for_dt_rejects_nonpositive_dt_cfl():
+    with pytest.raises(ValueError):
+        outflow_fraction_for_dt(0.5, dt=1.0, dt_cfl=0.0)
+    with pytest.raises(ValueError):
+        outflow_fraction_for_dt(0.5, dt=1.0, dt_cfl=-1.0)
+
+
+def test_step_calls_fewer_substep_passes_for_a_smaller_outflow_fraction():
+    """Proxy for the wall-clock win: a dt-scaled (smaller) outflow_fraction must
+    result in strictly fewer internal _single_update passes than the unscaled
+    default - the same call-count evidence cProfile used to diagnose the
+    original bottleneck, made into a fast, deterministic regression test."""
+    rows, cols = 10, 10
+    Z = np.zeros((rows, cols))
+    N = np.full((rows, cols), 0.05)
+    H = np.zeros((rows, cols))
+    H[4:7, 4:7] = 5.0
+
+    with mock.patch("simulation.engine._single_update", wraps=engine._single_update) as spy:
+        step(Z, H.copy(), N, outflow_fraction=0.5)
+        full_calls = spy.call_count
+
+    scaled_fraction = outflow_fraction_for_dt(0.5, dt=0.1, dt_cfl=1.0)
+    with mock.patch("simulation.engine._single_update", wraps=engine._single_update) as spy:
+        step(Z, H.copy(), N, outflow_fraction=scaled_fraction)
+        scaled_calls = spy.call_count
+
+    assert scaled_calls < full_calls
+
+
+@pytest.mark.parametrize("dt_ratio", [1.0, 0.5, 0.1, 0.01])
+def test_no_checkerboard_artifact_with_dt_scaled_outflow_fraction(dt_ratio):
+    """Regression, extending test_no_checkerboard_artifact_with_varying_roughness:
+    the dt-scaled outflow_fraction must not reintroduce the checkerboard/speckle
+    instability at any dt ratio the new mechanism can actually produce.
+
+    Macro-step count is scaled inversely with the resulting (smaller) fraction so
+    every case gets a comparable *cumulative* amount of redistribution by the end
+    - a fixed step count for all ratios was tried first and produced false
+    positives: at a tiny fraction, 60 macro steps just hasn't moved much water
+    yet, so the still-mostly-concentrated pool's sharp edge against its dry
+    neighbors reads as "rough" under this metric even with zero real
+    instability (confirmed by checking H.max()/flooded-cell-count alongside the
+    metric during this test's own construction - not a checkerboard, just an
+    under-spread pool). Scaling steps so cumulative fraction*n_steps stays
+    comparable to the original 60-step/0.5-fraction case removes that
+    confound and isolates the actual question: does a smaller per-macro-step
+    release, at a comparable total amount of water moved, still avoid the
+    speckle artifact. Capped at 4000 steps to keep the test fast; ratios
+    smaller than 0.01 would need more steps than that to reach comparable
+    spread and are covered instead by the monotonicity argument in
+    outflow_fraction_for_dt's docstring (a smaller requested fraction can only
+    ever produce an equal-or-smaller per-substep release than an
+    already-validated larger one, never a larger one)."""
+    rows, cols = 40, 40
+    y, x = np.mgrid[0:rows, 0:cols].astype(float)
+    cy, cx = rows / 2, cols / 2
+    Z = ((x - cx) ** 2 + (y - cy) ** 2) / (rows * cols) * 3.0
+    diagonal = (x - y) / max(rows, cols)
+    N = 0.09 - 0.07 * np.exp(-(diagonal ** 2) / (2 * 0.15 ** 2))
+
+    H = np.zeros((rows, cols))
+    cy_i, cx_i = rows // 2, cols // 2
+    H[cy_i - 2: cy_i + 3, cx_i - 2: cx_i + 3] = 400.0 / 25
+
+    fraction = outflow_fraction_for_dt(0.5, dt=dt_ratio, dt_cfl=1.0)
+    n_steps = min(max(60, round(30 / fraction)), 4000)
+    for _ in range(n_steps):
+        H = step(Z, H, N, outflow_fraction=fraction)
+
+    padded = np.pad(H, 1, mode="edge")
+    neighbor_mean = sum(
+        padded[1 + dr: 1 + dr + rows, 1 + dc: 1 + dc + cols]
+        for dr in (-1, 0, 1) for dc in (-1, 0, 1) if not (dr == 0 and dc == 0)
+    ) / 8.0
+    flooded = H > 1e-6
+    roughness = np.abs(H[flooded] - neighbor_mean[flooded]).mean()
+
+    assert roughness < 0.05, f"speckle artifact detected at dt_ratio={dt_ratio}: roughness={roughness:.5f}"
+
+
+def test_step_output_identical_to_unscaled_outflow_fraction_when_dt_ratio_is_one():
+    """Proves the calibration point is exact, not merely close - same spirit as
+    test_default_boundary_params_reproduce_wall_behavior."""
+    rows, cols = 10, 10
+    y, x = np.mgrid[0:rows, 0:cols].astype(float)
+    Z = ((x - cols / 2) ** 2 + (y - rows / 2) ** 2) / (rows * cols)
+    N = np.full((rows, cols), 0.05)
+    H = np.zeros((rows, cols))
+    H[4:7, 4:7] = 5.0
+
+    scaled_fraction = outflow_fraction_for_dt(0.5, dt=123.456, dt_cfl=123.456)
+
+    H_default = step(Z, H.copy(), N, outflow_fraction=0.5)
+    H_scaled = step(Z, H.copy(), N, outflow_fraction=scaled_fraction)
+
+    np.testing.assert_array_equal(H_default, H_scaled)
+
+
+def test_max_stable_substep_fraction_stays_at_the_real_data_validated_value():
+    """Pins _MAX_STABLE_SUBSTEP_FRACTION at its original 0.01, not the 0.02 a
+    roadmap-step-11 performance pass tried and reverted: raising it to 0.02
+    passed both of this file's calibrated synthetic checkerboard regressions
+    (this test's own flat-water control included), but produced a real,
+    visible mottled/branching artifact on an actual gauge-driven run against
+    real terrain around step 60000 - a scenario neither synthetic grid here
+    reproduces (continuous real boundary inflow through a few channel cells,
+    real heterogeneous roughness, tens of thousands of steps). See engine.py's
+    comment on this constant and docs/tcc-deviations.md for the full writeup
+    of the investigation that caught it. This test exists so
+    a future change to this constant can't silently reintroduce that already-
+    seen failure mode without a human re-running the same real-terrain check -
+    passing the synthetic scenarios below is necessary but was already proven
+    insufficient on its own."""
+    assert engine._MAX_STABLE_SUBSTEP_FRACTION == pytest.approx(0.01)
+
+    # Flat-water-everywhere control (the original step-1 diagnostic test,
+    # stricter than the varying-roughness grid below).
+    rows, cols = 20, 20
+    Z = np.zeros((rows, cols))
+    N = np.full((rows, cols), 0.05)
+    H = np.full((rows, cols), 2.0)
+    H[10, 10] += 0.5
+    for _ in range(30):
+        H = step(Z, H, N)
+    padded = np.pad(H, 1, mode="edge")
+    neighbor_mean = sum(
+        padded[1 + dr: 1 + dr + rows, 1 + dc: 1 + dc + cols]
+        for dr in (-1, 0, 1) for dc in (-1, 0, 1) if not (dr == 0 and dc == 0)
+    ) / 8.0
+    flooded = H > 1e-6
+    roughness = np.abs(H[flooded] - neighbor_mean[flooded]).mean()
+    assert roughness < 0.05, f"flat-water control regression: roughness={roughness:.5f}"
