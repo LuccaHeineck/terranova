@@ -20,8 +20,9 @@ folded into the middle.
 
 **Built:** The opposite order — the transition rule was implemented and validated on synthetic grids
 first (steps 1-2), *then* real DEM/land-cover data (steps 3-4), *then* FastAPI (step 5), *then* the
-frontend (step 6), *then* Docker (step 7), with real-timestep/real-event work (steps 8-9) coming after
-all of that, and CSI/RMSE validation (step 11, after performance work in step 10) still ahead.
+frontend (step 6), *then* Docker (step 7), with real-timestep/real-event work (steps 8-9) and CSI
+validation against a real event (step 10) coming after all of that, and performance benchmarking (step
+11) still ahead.
 
 **Why:** The transition rule is the one piece of highest academic risk — if the physics/math were
 wrong, everything built around it (API, sockets, containers) would need rework. Validating it in
@@ -236,11 +237,11 @@ conceptual expansion beyond what TCC1's data-flow table states.
 **Why this matters for the write-up, explicitly:** TCC1 draws a clean line — real gauge/HWM data is
 validation-only, never touches the engine's own computation. The actual implementation crosses that
 line: the engine is now *driven* by real gauge data, not just checked against it afterward. This isn't
-circular validation — the separate SGB/CPRM stage-indexed flood-extent shapefiles (step 11) remain the
-actual CSI comparison target, a dataset not yet used for anything — but the same station's data now
-serves two different roles across the project (driving input here; a different, disjoint real dataset
-for spatial validation later), which is worth being explicit and upfront about rather than letting a
-reader assume TCC1's original validation-only framing still holds.
+circular validation — the separate SGB/CPRM stage-indexed flood-extent data (see section 12 below) is
+the actual CSI comparison target, a disjoint real dataset from the driving gauge series — but the same
+station now serves two different roles across the project (driving input here; a different dataset for
+spatial validation there), which is worth being explicit and upfront about rather than letting a reader
+assume TCC1's original validation-only framing still holds.
 
 **Sub-decisions within step 9, also worth noting:**
 - **Real `Vazao` (discharge) field found directly on the ANA record** — the implementation plan
@@ -326,13 +327,131 @@ return signature is unchanged, no new return value was needed.
 
 ---
 
-## 12. Not yet built, relative to TCC1's stated plan (as of this session)
+## 12. CSI validation against the real May 2024 flood extent (step 10)
 
-- **CSI/RMSE validation metrics** — TCC1's core validation plan; scaffolded (`validation/` exists,
-  empty) but not implemented. Step 11, after step 10's performance work.
+**TCC1:** Validate simulated flood extent against real 2023/2024 flood maps via CSI (Critical Success
+Index), comparing simulated vs. observed flooded cells; RMSE against HWM/SWOT depth points for vertical
+accuracy. `validation/` was scaffolded from the start of the project for this.
+
+**Built:** `validation/metrics.py` implements CSI, Hit Rate, and False Alarm Rate as pure functions over
+boolean NumPy arrays (all three are the same confusion-matrix counts — TP/FP/FN — so implementing HR/FAR
+alongside CSI was free). `ingestion/flood_extent.py` (new) ingests real ground truth: SGB/CPRM (via
+IPH-UFRGS) publishes real HEC-RAS-2D-modeled flood-extent polygons for Lajeado, indexed by river stage,
+as a public, no-auth ArcGIS REST MapServer (`geoportal.sgb.gov.br/server/rest/services/LAJEADO/
+MapServer`) — the same "direct scriptable API, no portal scraping" pattern already used for the DEM
+(OpenTopography) and land-cover (MapBiomas) ingestion. One layer, `COTA_3367cm`, is stamped 33.67m —
+essentially exactly the real May 2024 peak stage this project's own hydrograph already drives from (TCC-
+documented as 33.66m) — the natural CSI comparison target. `examples/validate_may2024.py` (new) runs the
+real gauge-driven engine (steps 8-9, plus the outlet boundary condition) from a dry grid through the real
+observed peak (found directly from the gauge series via `argmax`, not hardcoded), thresholds the
+resulting depth array into a "flooded" mask, and scores it against the real SGB polygon rasterized onto
+the same grid. See `docs/project-plan.md`'s "Step 10 done" for the actual numbers this run produced.
+
+**Deviation 1 — validation runs at 90m resolution, not the officially-served 30m grid.** A full
+gauge-driven run at the live API's 30m resolution takes hours (see section 10/11's step-9 known
+limitations); this is a one-off validation script, not a production requirement, so
+`config.settings.VALIDATION_RESOLUTION_METERS = 90.0` builds a separate grid
+(`ingestion.dem.build_elevation_matrix`'s new optional `resolution` parameter, defaulting to the
+existing 30m for every other caller) persisted to its own `data/processed/*_90m.tif` files, never
+touching `lajeado_estrela_z.tif`/`_n.tif`. `ingestion.landcover.build_roughness_matrix` needed no change
+— it already aligns to whatever reference grid it's given. A deliberate, documented wall-clock tradeoff,
+not a claim that 90m is the "right" resolution for this model.
+
+**Deviation 2 — RMSE is not implemented this step.** See section 13 below for why (no confirmed
+structured HWM dataset for this small ROI) and its deferred status.
+
+**Deviation 3 — the validation loop is a deliberate duplicate, not a shared function.**
+`api/routers/simulations.py::_run_gauge_driven` is an async WebSocket coroutine inside `api/`, which
+`examples/` must never import (`docs/ARCHITECTURE.md`'s dependency direction). `validate_may2024.py`
+duplicates a trimmed, synchronous version of that same loop (same `dt`-cap/volume-bookkeeping logic,
+different stop condition — the real peak instead of the hydrograph's full duration) rather than
+introducing a new module boundary `ARCHITECTURE.md` doesn't currently sanction. The same kind of choice
+`docs/project-plan.md` already flags as acceptable for `poc_grid.py`/`poc_real_dem.py`'s own independent
+loops — named explicitly here rather than left as a silent gap.
+
+---
+
+## 13. Performance investigation: substep decomposition vs. CFL-derived dt (step 11)
+
+**TCC1:** The thesis's core premise is that a macroscopic-CA model runs in seconds-to-minutes against
+HEC-RAS 2D's hours-to-days, citing Jamali et al. 2019 (CA-ffé, 250-1,100x faster than traditional models)
+and Torres et al. 2022 (~1s vs. 2012s) as the comparison class this project's own performance section
+(TCC1's objective (d), `docs/tcc-summary.md`'s validation plan) is expected to land near. Step 9/10's
+real gauge-driven runs instead take on the order of tens of minutes to hours even at the engine's own
+committed 30m resolution (`docs/development-difficulties.md`'s "the performance wall" and "restricting
+to a partial time window" entries record a real, measured 30m run trending toward 7-8h to reach just the
+peak) - a real, unresolved gap against that premise, and roadmap step 11's explicit job to investigate.
+
+**Hypothesis investigated:** profiling (cProfile, a representative 90m/30m gauge-driven run) found
+`step()`'s internal substep decomposition dominates ~95% of wall-clock time -
+`_MAX_STABLE_SUBSTEP_FRACTION` (tuned in step 1, before `compute_stable_dt`'s real CFL-derived `dt`
+existed in step 8) forces a fixed `ceil(outflow_fraction / 0.01)` synchronous passes per macro step
+(50 at the default `outflow_fraction=0.5`), entirely decoupled from how small the real `dt` for that
+step actually is. The hypothesis: reconciling the two - so a macro step driven by a small real `dt`
+doesn't still pay for 50 full-grid passes designed for a `dt`-blind heuristic - would recover most of
+that cost.
+
+**What was tried:**
+
+- **(a) `outflow_fraction_for_dt(outflow_fraction, dt, dt_cfl)`** (`simulation/engine.py`): scales the
+  requested `outflow_fraction` down proportionally whenever the `dt` actually used for a macro step
+  (`api/routers/simulations.py::_run_gauge_driven`) is capped below the raw CFL bound `compute_stable_dt`
+  would otherwise allow (`dt_cfl`) - e.g. by the 900s inflow-burst cap or a hydrograph's
+  remaining-duration clip. Mathematically exact at the calibration anchor (`dt == dt_cfl` reproduces
+  `outflow_fraction` unchanged, byte-identical to pre-existing behavior), monotone (can only reduce
+  substep count relative to today's baseline, never increase it), and fully tested (unit tests for the
+  scaling formula itself, a mocked substep-call-count reduction, and a checkerboard regression swept
+  across `dt_ratio in [1.0, 0.5, 0.1, 0.01]`). **Real-world effect measured as negligible**: re-running
+  the real May 2024 gauge-driven event to the observed peak at 90m resolution with only this change gave
+  82,933 steps, CSI 0.133, ~23.6 min wall-clock - matching the unmodified baseline (82,933 steps, CSI
+  0.133, ~22.7 min) to the step. The reason, found empirically rather than assumed: `dt` is rarely capped
+  below `dt_cfl` during the fast/wet part of a real event (velocity itself, not an application-level cap,
+  is what drives `dt` down there) - which is where most of a real event's runtime is actually spent.
+- **(b) Relaxing `_MAX_STABLE_SUBSTEP_FRACTION` from 0.01 to 0.02** (a global, dt-independent halving of
+  the substep count for any given `outflow_fraction`): swept against both of `test_engine.py`'s
+  calibrated synthetic checkerboard regressions (the varying-roughness grid and the flat-water control)
+  and found safe with margin (0.02 passes both; 0.025 already fails the flat-water control). Combined
+  with (a), this gave a **real, measured 1.85x speedup at 90m** (82,933 -> 90,620 steps, 22.7 -> 12.3 min
+  wall-clock) and even a slightly *improved* CSI (0.133 -> 0.152) - a genuinely good result on the
+  calibrated tests. **A visual check against the actual real gauge-driven scenario** (real terrain, real
+  hydrograph, real outlet boundary - specifically run because a synthetic-only metric had already been
+  flagged as insufficient to trust alone) **showed a real, visible mottled/branching artifact** appearing
+  around step 60,000, absent from the pre-fix baseline at the same step. Isolated via a controlled
+  ablation (re-running the identical real scenario with only the substep fraction varied): 0.02 alone
+  reproduces the artifact; 0.01 alone (with (a)'s dt-scaling still applied) is clean and numerically
+  matches the pre-fix trajectory closely. **Reverted to 0.01** - neither calibrated synthetic test (both
+  small, idealized grids: a smooth radial bowl and a perfectly flat plane) reproduces whatever real
+  terrain, sustained real boundary inflow through a few channel cells, and real heterogeneous roughness
+  over tens of thousands of steps does that triggers this specific instability.
+
+**Conclusion - a negative result, not abandoned work:** neither change survives as a validated
+performance fix. (a) is correct, safe, and kept (harmless, mathematically exact, fully tested) but
+delivers no measurable win. (b) delivered a real win but isn't safe on real data. The wet/fast-flow,
+CFL-uncapped regime - which dominates a real multi-day event's runtime - remains the actual unaddressed
+bottleneck; closing the gap to TCC1's cited performance class (Jamali et al., Torres et al.) is still
+open work for a future roadmap-step-11 pass. **This also flags a real gap in this project's own testing
+methodology, not just the engine**: `test_engine.py`'s existing checkerboard regressions, though useful
+and worth keeping, are not sufficient evidence of real-world numerical stability on their own - they
+missed a failure mode a single visual check against real data caught immediately. Future numerical-
+stability changes to `simulation/engine.py` should include a real-terrain check (not just the two
+synthetic grids) before being considered validated, not as an afterthought.
+
+---
+
+## 14. Not yet built, relative to TCC1's stated plan (as of this session)
+
+- **RMSE validation metric (depth vs. HWM/SWOT points)** — TCC1's other core validation metric alongside
+  CSI (section 12 above). Deliberately deferred, not attempted in step 10: the only real HWM data found
+  is a CPRM PDF technical report (`nota_tecnica_levantamento_cheias_2024_rs.pdf`, a statewide May-2024
+  survey) with no confirmed structured/tabular extract for this project's small Lajeado/Estrela ROI
+  specifically. Extracting a clean point dataset from it (or sourcing SWOT points instead) is future
+  work, not blocking step 10's CSI deliverable.
 - **GPU/CuPy performance benchmarking** — TCC1's stack rationale names CuPy-compatibility as a design
   goal; the NumPy code has been kept vectorized/CuPy-compatible throughout, but nothing has actually
-  been run on a GPU yet. Folded into step 10, tried only after CPU-side fixes land.
+  been run on a GPU yet. Roadmap step 11 (see section 13 above for the CPU-side investigation attempted
+  first, which found the real bottleneck is the substep decomposition, not something GPU parallelism
+  alone would fix, given it's dominated by the same fixed-count sequential dependency regardless of
+  where each pass executes).
 - **Persisting `H[t]` frames to disk** — named explicitly in TCC1's data-flow diagram, not built (see
   section 5).
 - **Base64 PNG frame encoding** — named explicitly in TCC1's data-flow diagram, not built; JSON arrays
@@ -341,7 +460,7 @@ return signature is unchanged, no new return value was needed.
   deferred pending an advisor conversation about scope (see section 9).
 - **Neighborhood-type (Moore/von Neumann) toggle** — named explicitly in TCC1's frontend section, not
   built; engine is Moore-only.
-- **Automated pytest suite (50 tests across engine/ingestion/API, as of step 9)** — not something TCC1
+- **Automated pytest suite (70 tests across engine/ingestion/validation/API, as of step 10)** — not something TCC1
   describes at all; TCC1's own informal PoC validation was print-statement/manual-inspection based
   (Quadro 6's metrics table). Worth mentioning in the write-up as a methodological upgrade in TCC II
   over TCC1's own informal validation approach, not a deviation in the "diverged from the plan" sense.

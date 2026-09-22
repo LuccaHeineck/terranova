@@ -39,6 +39,26 @@ MOORE_OFFSETS = [
 # further reducible by shrinking this constant). `step` transparently
 # decomposes a larger requested outflow_fraction into enough sub-updates to
 # stay under this bound.
+#
+# Re-swept once in roadmap step 11 (performance benchmarking) and deliberately
+# reverted back to 0.01: raising this to 0.02 passed both of test_engine.py's
+# calibrated synthetic checkerboard regressions (the varying-roughness grid
+# and the flat-water control), but a visual check against a real gauge-driven
+# run on real terrain - specifically requested before trusting the synthetic
+# tests alone - showed a real, visible mottled/branching artifact by ~step
+# 60000 that neither synthetic scenario reproduced (real boundary inflow
+# entering continuously through a few channel cells over tens of thousands of
+# steps, on real heterogeneous roughness, isn't represented by either
+# calibrated grid). Isolated by re-running the same real scenario with only
+# the substep fraction changed: 0.02 alone reproduces the artifact, 0.01
+# alone (with outflow_fraction_for_dt's dt-scaling still applied) is clean.
+# So this constant stays at its original, real-data-validated value. Neither
+# this relaxation nor outflow_fraction_for_dt below survived as a validated
+# performance win in the end (the latter measured to have no significant
+# effect either, at real 90m resolution - dt is rarely capped below the CFL
+# bound during the fast/wet part of a real event, which is where most of the
+# runtime actually goes) - see docs/tcc-deviations.md for the full writeup of
+# this investigation as a negative result, not abandoned work.
 _MAX_STABLE_SUBSTEP_FRACTION = 0.01
 
 
@@ -268,6 +288,45 @@ def compute_stable_dt(
         return _NO_FLOW_FALLBACK_DT_SECONDS
 
     return courant_number * dx / v_max
+
+
+def outflow_fraction_for_dt(outflow_fraction: float, dt: float, dt_cfl: float) -> float:
+    """Scale a requested `outflow_fraction` down when the `dt` actually used for a
+    macro step is smaller than the raw CFL bound `compute_stable_dt` would allow
+    (`dt_cfl`, i.e. its return value with `courant_number=1.0`, before any
+    application-level cap - e.g. the 900s inflow-burst cap or a hydrograph's
+    remaining-duration clip in `api/routers/simulations.py::_run_gauge_driven`).
+
+    Rationale: `step()`'s own `outflow_fraction` has no notion of elapsed time -
+    it's a step-1-era heuristic ("release this fraction of depth per macro step"),
+    while `dt_cfl` is a real physical elapsed-time bound derived in step 8. When a
+    caller's `dt` is capped well below `dt_cfl`, physically far less time (and thus
+    far less real depth transfer) should be considered to have happened in that
+    macro step than `outflow_fraction` alone assumes - so scale it down
+    proportionally. Anchored so `dt == dt_cfl` reproduces `outflow_fraction`
+    unchanged (today's exact behavior in that regime); `dt < dt_cfl` scales down;
+    `dt > dt_cfl` (shouldn't happen if `dt_cfl` truly bounds `dt`, but handled
+    defensively) clamps back to `outflow_fraction`, never scaling up.
+
+    Does NOT help when `dt == dt_cfl` (velocity itself, not an application cap, is
+    what's driving `dt` down - the wet/fast-flow part of a real event). That
+    regime was swept empirically (see `_MAX_STABLE_SUBSTEP_FRACTION`'s comment
+    above) and found to still need close to the full substep count for stability
+    - a real, documented limitation, not an oversight. In practice, measured
+    against the real May 2024 gauge-driven event at 90m resolution, this function
+    was found to have no significant effect on step count, wall-clock time, or
+    CSI relative to not using it at all - `dt` is rarely capped below `dt_cfl`
+    during the fast/wet part of a real event, which is where most of the runtime
+    goes. Kept because it's correct and harmless, not because it's a validated
+    performance win; see `docs/tcc-deviations.md` for the full investigation.
+    """
+    if not (0 < outflow_fraction <= 1):
+        raise ValueError("outflow_fraction must be in (0, 1]")
+    if dt <= 0:
+        raise ValueError("dt must be positive")
+    if dt_cfl <= 0:
+        raise ValueError("dt_cfl must be positive")
+    return outflow_fraction * min(1.0, dt / dt_cfl)
 
 
 def seed_pool_at_lowest_point(Z: np.ndarray, H: np.ndarray, volume: float) -> None:

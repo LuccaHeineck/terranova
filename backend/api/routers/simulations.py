@@ -34,7 +34,7 @@ from api.state import (
 )
 from config.settings import TARGET_RESOLUTION_METERS
 from ingestion.hydrograph import Hydrograph, discharge_to_inflow
-from simulation.engine import compute_stable_dt, seed_pool_at_lowest_point, step
+from simulation.engine import compute_stable_dt, outflow_fraction_for_dt, seed_pool_at_lowest_point, step
 
 router = APIRouter()
 
@@ -129,7 +129,10 @@ async def _run_gauge_driven(
     t = 0
 
     while elapsed_time < hydrograph.duration_seconds:
-        dt = compute_stable_dt(Z, H, N, TARGET_RESOLUTION_METERS)
+        # dt_cfl is the raw CFL bound (courant_number=1.0), kept separate from the
+        # capped dt below so outflow_fraction_for_dt can tell how much smaller an
+        # application-level cap made this step's dt than physics alone would allow.
+        dt_cfl = compute_stable_dt(Z, H, N, TARGET_RESOLUTION_METERS)
         # Cap at the raw ANA feed's own typical sample spacing (~900s). CFL gives
         # an upper bound on dt, not a target, so a smaller dt is always safe - and
         # on a still-dry grid `compute_stable_dt` returns engine.py's
@@ -141,7 +144,7 @@ async def _run_gauge_driven(
         # instead of an arbitrary hour (it does not eliminate the first-step
         # transient - concentrating a whole river's discharge through a few 30m
         # cells is an inherent coarse-grid simplification).
-        dt = min(dt, 900.0)
+        dt = min(dt_cfl, 900.0)
         # Clip so the final iteration lands exactly on the hydrograph's end, never
         # past it - Hydrograph.discharge_at raises outside its recorded range.
         dt = min(dt, hydrograph.duration_seconds - elapsed_time)
@@ -154,7 +157,10 @@ async def _run_gauge_driven(
             Z,
             H,
             N,
-            outflow_fraction=params.outflow_fraction,
+            # Scaled down whenever an application-level cap (above) makes dt
+            # smaller than the raw CFL bound would allow - see
+            # outflow_fraction_for_dt's docstring in simulation/engine.py for why.
+            outflow_fraction=outflow_fraction_for_dt(params.outflow_fraction, dt, dt_cfl),
             inflow=inflow,
             boundary_elevation=boundary_elevation,
             boundary_roughness=boundary_roughness,
