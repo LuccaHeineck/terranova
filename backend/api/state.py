@@ -12,6 +12,12 @@ disk or triggering the app's lifespan at all.
 way but loaded best-effort: if the raw gauge file is missing or unparseable the
 lifespan leaves both as `None` rather than failing startup, and `simulations.py`
 turns a gauge-driven request into a 503 while seeded-pool runs keep working.
+
+`BOUNDARY_ELEVATION`/`BOUNDARY_ROUGHNESS` (roadmap step 10's outlet boundary
+condition) are loaded unconditionally alongside `Z`/`N` - they only depend on
+the real terrain, not the hydrograph file, so there's no best-effort case for
+them. Used only by gauge-driven runs (`_run_seeded_pool` stays a closed system,
+unchanged, so its own exact-conservation invariant keeps holding).
 """
 
 import numpy as np
@@ -23,6 +29,8 @@ N: np.ndarray | None = None
 BOUNDS: tuple[float, float, float, float] | None = None
 HYDROGRAPH: Hydrograph | None = None
 INFLOW_MASK: np.ndarray | None = None
+BOUNDARY_ELEVATION: np.ndarray | None = None
+BOUNDARY_ROUGHNESS: np.ndarray | None = None
 
 
 def get_terrain() -> np.ndarray:
@@ -43,3 +51,11 @@ def get_hydrograph() -> Hydrograph | None:
 
 def get_inflow_mask() -> np.ndarray | None:
     return INFLOW_MASK
+
+
+def get_boundary_elevation() -> np.ndarray | None:
+    return BOUNDARY_ELEVATION
+
+
+def get_boundary_roughness() -> np.ndarray | None:
+    return BOUNDARY_ROUGHNESS
