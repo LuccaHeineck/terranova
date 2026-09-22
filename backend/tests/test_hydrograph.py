@@ -5,6 +5,7 @@ from ingestion.hydrograph import (
     Hydrograph,
     discharge_to_inflow,
     find_boundary_inflow_mask,
+    find_boundary_outlet,
     find_calibration_pairs,
     load_raw_stage_series,
     stage_to_discharge,
@@ -132,6 +133,43 @@ def test_find_boundary_inflow_mask_rejects_invalid_edge():
 
     with pytest.raises(ValueError, match="edge"):
         find_boundary_inflow_mask(Z, edge="northwest")
+
+
+def test_find_boundary_outlet_marks_only_channel_cells_on_given_edge():
+    # Same 5x5 synthetic terrain as the inflow-mask test, but checking the
+    # south edge this time - only its channel notch (columns 1-2) should
+    # become an outlet, not the rest of the south edge or any other edge.
+    Z = np.full((5, 5), 100.0)
+    Z[-1, 1:3] = 10.0
+    N = np.full((5, 5), 0.05)
+
+    boundary_elevation, boundary_roughness = find_boundary_outlet(Z, N, edge="south")
+
+    assert boundary_elevation.shape == (7, 7)
+    assert boundary_roughness.shape == (7, 7)
+    # Outlet cells: lower than the real terrain by drop_m (default margin), not +inf.
+    assert boundary_elevation[-1, 2] == pytest.approx(10.0 - 2.0)
+    assert boundary_elevation[-1, 3] == pytest.approx(10.0 - 2.0)
+    # Rest of the south edge, and every other edge, stays a wall.
+    assert boundary_elevation[-1, 1] == np.inf
+    assert boundary_elevation[-1, -2] == np.inf
+    assert np.all(boundary_elevation[0, :] == np.inf)
+    assert np.all(boundary_elevation[:, 0] == np.inf)
+    assert np.all(boundary_elevation[:, -1] == np.inf)
+    # Interior is untouched, matching Z/N exactly.
+    np.testing.assert_array_equal(boundary_elevation[1:-1, 1:-1], Z)
+    np.testing.assert_array_equal(boundary_roughness[1:-1, 1:-1], N)
+    # Outlet roughness is water's Manning's n, not the wall's 1.0 placeholder.
+    assert boundary_roughness[-1, 2] == pytest.approx(0.040)
+    assert boundary_roughness[-1, 1] == pytest.approx(1.0)
+
+
+def test_find_boundary_outlet_rejects_invalid_edge():
+    Z = np.full((5, 5), 100.0)
+    N = np.full((5, 5), 0.05)
+
+    with pytest.raises(ValueError, match="edge"):
+        find_boundary_outlet(Z, N, edge="northwest")
 
 
 def test_discharge_to_inflow_splits_volume_uniformly_across_mask():

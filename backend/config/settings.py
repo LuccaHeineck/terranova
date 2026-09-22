@@ -110,6 +110,16 @@ HYDROGRAPH_RAW_PATH = RAW_DIR / "estrela_stage_may2024.xml"
 # meaningful once rule 1 has thrown out the edges the channel never crosses.
 HYDROGRAPH_INFLOW_EDGE = "north"
 
+# Which ROI boundary edge the river leaves through downstream - the mirror of
+# HYDROGRAPH_INFLOW_EDGE above, using the same two-stage rule already applied
+# there: "south" is the only other edge the channel actually crosses (rule 1),
+# and it has the LOWER of the two channel-crossing minimums (11.0m vs north's
+# 12.0m), confirming it's downstream (rule 2). Added for the outlet boundary
+# condition (roadmap step 10 - see docs/tcc-deviations.md) that lets water
+# actually leave the closed ROI here, instead of the whole basin flooding to
+# physically implausible depths once a real multi-day event is replayed.
+HYDROGRAPH_OUTLET_EDGE = "south"
+
 CORS_ALLOWED_ORIGINS = os.environ.get(
     "CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
 ).split(",")
