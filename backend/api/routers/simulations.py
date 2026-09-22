@@ -23,7 +23,15 @@ import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field, model_validator
 
-from api.state import get_bounds, get_hydrograph, get_inflow_mask, get_roughness, get_terrain
+from api.state import (
+    get_boundary_elevation,
+    get_boundary_roughness,
+    get_bounds,
+    get_hydrograph,
+    get_inflow_mask,
+    get_roughness,
+    get_terrain,
+)
 from config.settings import TARGET_RESOLUTION_METERS
 from ingestion.hydrograph import Hydrograph, discharge_to_inflow
 from simulation.engine import compute_stable_dt, seed_pool_at_lowest_point, step
@@ -110,11 +118,14 @@ async def _run_gauge_driven(
     N: np.ndarray,
     hydrograph: Hydrograph,
     inflow_mask: np.ndarray,
+    boundary_elevation: np.ndarray,
+    boundary_roughness: np.ndarray,
 ) -> None:
     H = np.zeros_like(Z)
     cell_area_m2 = TARGET_RESOLUTION_METERS ** 2
     elapsed_time = 0.0
     cumulative_inflow = 0.0
+    cumulative_outflow = 0.0
     t = 0
 
     while elapsed_time < hydrograph.duration_seconds:
@@ -138,7 +149,22 @@ async def _run_gauge_driven(
         discharge = hydrograph.discharge_at(elapsed_time)
         inflow = discharge_to_inflow(discharge, dt, inflow_mask, cell_area_m2)
 
-        H = step(Z, H, N, outflow_fraction=params.outflow_fraction, inflow=inflow)
+        volume_before = H.sum()
+        H = step(
+            Z,
+            H,
+            N,
+            outflow_fraction=params.outflow_fraction,
+            inflow=inflow,
+            boundary_elevation=boundary_elevation,
+            boundary_roughness=boundary_roughness,
+        )
+        # step()'s return value already reflects whatever left through the
+        # outlet boundary - this is the exact bookkeeping invariant documented
+        # in step()'s own docstring, not an approximation. Roadmap step 10: the
+        # outlet exists so a real multi-day event doesn't flood the entire
+        # closed ROI to physically implausible depths (see docs/tcc-deviations.md).
+        cumulative_outflow += volume_before + inflow.sum() - H.sum()
         elapsed_time += dt
         cumulative_inflow += inflow.sum()
         t += 1
@@ -148,8 +174,9 @@ async def _run_gauge_driven(
         # small fixed constant (SEED_VOLUME), here it grows to order 1e7 over
         # 100k+ steps of real inflow, where float64 round-off alone can exceed an
         # absolute 1e-6 without anything actually being wrong.
-        assert abs(H.sum() - cumulative_inflow) <= 1e-9 * max(1.0, abs(cumulative_inflow)), (
-            f"volume drifted at step {t}: {H.sum()} vs {cumulative_inflow}"
+        expected_volume = cumulative_inflow - cumulative_outflow
+        assert abs(H.sum() - expected_volume) <= 1e-9 * max(1.0, abs(expected_volume)), (
+            f"volume drifted at step {t}: {H.sum()} vs {expected_volume}"
         )
 
         if t % params.frame_interval == 0 or elapsed_time >= hydrograph.duration_seconds:
@@ -160,6 +187,7 @@ async def _run_gauge_driven(
                     "volume": float(H.sum()),
                     "elapsed_time": elapsed_time,
                     "cumulative_inflow": float(cumulative_inflow),
+                    "cumulative_outflow": float(cumulative_outflow),
                 }
             )
 
@@ -172,6 +200,8 @@ async def stream_simulation(
     N: np.ndarray = Depends(get_roughness),
     hydrograph: Hydrograph | None = Depends(get_hydrograph),
     inflow_mask: np.ndarray | None = Depends(get_inflow_mask),
+    boundary_elevation: np.ndarray | None = Depends(get_boundary_elevation),
+    boundary_roughness: np.ndarray | None = Depends(get_boundary_roughness),
 ) -> None:
     # Popped rather than just read: a run can only be streamed once, matching
     # the "no persistence layer" decision - reconnecting with the same run_id
@@ -187,7 +217,9 @@ async def stream_simulation(
         if params.mode == "seeded_pool":
             await _run_seeded_pool(websocket, params, Z, N)
         else:
-            await _run_gauge_driven(websocket, params, Z, N, hydrograph, inflow_mask)
+            await _run_gauge_driven(
+                websocket, params, Z, N, hydrograph, inflow_mask, boundary_elevation, boundary_roughness
+            )
         await websocket.send_json({"done": True})
     except WebSocketDisconnect:
         pass
