@@ -454,7 +454,74 @@ run. That left the other mitigation, an actual outlet, as the real fix:
     needed for the same real-time span. Correctness and performance turned out to be the same fix here,
     not a tradeoff.
 
+**Step 10 done.** `validation/` (empty since it was scaffolded) now implements CSI, and the engine has
+been scored against a real, independent flood-extent dataset for the real May 2024 event for the first
+time — closing the gap the outlet-boundary work above flagged as a prerequisite.
+
+- **Ground truth**: SGB/CPRM (via IPH-UFRGS) publishes real HEC-RAS-2D-modeled flood-extent polygons for
+  Lajeado, indexed by river stage, as a public, no-auth ArcGIS REST MapServer
+  (`geoportal.sgb.gov.br/server/rest/services/LAJEADO/MapServer`) — the same "direct scriptable API, no
+  portal scraping" pattern already used for the DEM (OpenTopography) and land-cover (MapBiomas)
+  ingestion, found by inspecting the underlying ArcGIS web app config rather than scraping SGB's
+  interactive viewer. Layer `COTA_3367cm` (id 18) is stamped 33.67m — essentially exactly this project's
+  own real observed May 2024 peak (33.66m, confirmed directly from the gauge series via `argmax`, not
+  just the TCC's cited value) — the natural CSI comparison target.
+  `scripts/download_flood_extent.py` (new) fetches it (`GET .../18/query?where=1=1&outFields=*&f=geojson`
+  — note: must NOT include `resultRecordCount`, which 400s with "Pagination is not supported") and saves
+  the raw GeoJSON unparsed to `data/raw/`, same split as the other three `download_*.py` scripts.
+- **`backend/ingestion/flood_extent.py`** (new) turns that raw GeoJSON into a boolean "observed flooded"
+  mask aligned to any reference grid: `load_raw_geojson` (asserts exactly one feature, matching the real
+  response shape), `reproject_geometry` (the source polygon is `EPSG:4674`, SIRGAS 2000 geographic - via
+  `rasterio.warp.transform_geom`, which works directly on GeoJSON-like dicts, no new
+  shapely/geopandas dependency needed), `rasterize_flood_extent` (`rasterio.features.rasterize`), and
+  `build_observed_flood_mask` (the full pipeline, persisted as a GeoTIFF, mirroring
+  `build_elevation_matrix`/`build_roughness_matrix`).
+- **`backend/validation/metrics.py`** (new): `csi`, `hit_rate`, `false_alarm_rate` - pure functions over
+  boolean NumPy arrays (all three are the same confusion-matrix TP/FP/FN counts, so HR/FAR came free
+  alongside the required CSI). Each raises `ValueError` on an undefined all-zero-denominator input rather
+  than silently returning a placeholder.
+- **Validation runs at 90m resolution, not the officially-served 30m grid** - a deliberate, documented
+  wall-clock tradeoff (see `docs/tcc-deviations.md` section 12): a full 30m gauge-driven run takes hours
+  (step 9's known limitation above), and this is a one-off validation script, not a production path.
+  `ingestion.dem.build_elevation_matrix` gained an optional `resolution` parameter (default unchanged -
+  30m, zero risk to the live API) to build this separate grid, persisted to its own
+  `data/processed/*_90m.tif` files; `build_roughness_matrix` needed no change, since it already aligns to
+  whatever reference grid it's given.
+- **`backend/examples/validate_may2024.py`** (new) is the real end-to-end runner: builds the 90m `Z`/`N`,
+  finds the real observed peak directly from the gauge stage series (`ingestion.hydrograph.
+  load_raw_stage_series` + `argmax`), then runs a trimmed, synchronous duplicate of `api/routers/
+  simulations.py::_run_gauge_driven`'s loop (same `dt`-cap-at-900s/volume-bookkeeping logic, but stopping
+  at the real peak instead of the hydrograph's full ~14-day duration) from a dry grid. A deliberate
+  duplication, not a refactor - `_run_gauge_driven` is an async WebSocket coroutine inside `api/`, which
+  `examples/` must never import; see `docs/tcc-deviations.md` section 12 for why this is named as a
+  conscious choice rather than a silent gap.
+- **Real result, run to completion end-to-end**: reached the real observed peak (33.66m, day 5.56 of the
+  record) after **82,933 steps, 133.5h simulated, 28.5 minutes wall-clock** - the same step count as the
+  earlier ad-hoc 90m test that first proved the outlet condition works, confirming the pipeline is
+  exactly reproducible. Exact mass balance held (cumulative inflow 444,592.2, cumulative outflow
+  442,354.5, final `H.sum()` 2,237.6). Against the real SGB `COTA_3367cm` ground truth (831 of 3,904
+  cells flooded, 21.3% of the ROI at 90m) the simulation's own flooded extent (436 of 3,904 cells, 11.2%)
+  scores **CSI 0.133, Hit Rate 0.179, False Alarm Rate 0.658** - a real, modest number, reported as-is:
+  the simulation under-predicts extent at this coarse resolution and with the outlet's fixed-margin
+  drainage rate (a documented modeling simplification, not a calibrated discharge capacity - see
+  `docs/tcc-deviations.md` section 11), rather than a result tuned to look better. A legitimate direction
+  for future work (widening the ROI, calibrating the outlet, or running at finer resolution) rather than
+  something to fix by adjusting the metric.
+- **RMSE explicitly deferred, not attempted this step** - the only HWM data found is a CPRM PDF technical
+  report with no confirmed structured/tabular extract for this project's small ROI; documented in
+  `docs/tcc-deviations.md` section 13 rather than silently skipped.
+- **`backend/tests/`**: `test_flood_extent.py` (5 new: rasterization onto a hand-built grid with a
+  hand-computed expected mask, a same-CRS reprojection identity check, the full ingestion pipeline
+  against synthetic fixtures, and the multiple-features rejection), `test_metrics.py` (6 new: CSI/HR/FAR
+  hand-computed on a tiny synthetic grid, plus each metric's undefined-input `ValueError`), and one new
+  test in `test_ingestion.py` (`build_elevation_matrix`'s `resolution` override actually changes the
+  output grid shape). Full suite: 70/70 passing.
+
 To run the CA-engine PoC directly (bare-metal, unrelated to Docker): `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
+
+To run the real end-to-end CSI validation against the May 2024 event (bare-metal, expect ~30 minutes):
+`cd backend && .venv/bin/python -m examples.validate_may2024` (requires the raw DEM/land-cover/hydrograph
+files from steps 3/4/9 plus `.venv/bin/python -m scripts.download_flood_extent` to have been run first).
 
 To run the full containerized stack: `docker compose up --build` from the repo root, then open `http://localhost:5173`.
 
@@ -474,6 +541,7 @@ backend/
     __init__.py
     poc_grid.py        # small artificial-grid demo: fake terrain, pool of water, run N steps, plot/check
     poc_real_dem.py     # same idea, on the real Lajeado/Estrela elevation matrix (step 3), + real dt (step 8)
+    validate_may2024.py  # real end-to-end CSI run: gauge-driven engine to the real peak vs. real SGB ground truth (step 10)
   api/
     __init__.py
     main.py             # FastAPI() app, lifespan loads Z/N/bounds/hydrograph (best-effort), includes routers
@@ -484,23 +552,30 @@ backend/
       simulations.py    # POST /simulations, WS /simulations/{run_id}/stream — seeded_pool + gauge_driven modes
   ingestion/
     __init__.py
-    dem.py              # raw GeoTIFF -> reproject -> crop -> sink-fill -> Z array (step 3)
+    dem.py              # raw GeoTIFF -> reproject -> crop -> sink-fill -> Z array (step 3, resolution param since step 10)
     landcover.py         # raw MapBiomas GeoTIFF -> align to Z's grid -> Manning's-n lookup -> N array (step 4)
     hydrograph.py         # raw ANA XML -> real rating curve -> Hydrograph + boundary inflow mask (step 9)
+    flood_extent.py        # raw SGB GeoJSON -> reproject -> rasterize -> observed flooded mask (step 10)
+  validation/
+    __init__.py
+    metrics.py            # csi, hit_rate, false_alarm_rate — pure functions over boolean masks (step 10)
   config/
     __init__.py
-    settings.py         # ROI bbox, DEM/land-cover/hydrograph source/CRS/resolution, data paths, API keys
+    settings.py         # ROI bbox, DEM/land-cover/hydrograph/flood-extent source/CRS/resolution, data paths, API keys
   scripts/
     __init__.py
     download_dem.py      # CLI: fetch the raw DEM tile from OpenTopography into data/raw/
     download_landcover.py # CLI: fetch the raw MapBiomas land-cover clip into data/raw/
     download_hydrograph.py # CLI: fetch the raw ANA gauge record for station 86879300 into data/raw/ (step 9)
+    download_flood_extent.py # CLI: fetch the real SGB COTA_3367cm flood-extent polygon into data/raw/ (step 10)
   tests/
     __init__.py
     test_engine.py
     test_ingestion.py
     test_landcover.py
     test_hydrograph.py
+    test_flood_extent.py
+    test_metrics.py
     test_api.py
 frontend/
   package.json        # react, react-dom, leaflet, tailwindcss/@tailwindcss/vite (npm, TypeScript, Vite)
@@ -524,9 +599,9 @@ frontend/
       LogPanel.tsx                     # status/grid_shape/bounds + scrolling step/volume/elapsed log + errors
 ```
 
-`validation/` still exists as an empty, README-documented placeholder — no code yet, activates step 10.
 `data/raw/` and `data/processed/` now hold real (gitignored) files once `download_dem.py`/
-`download_landcover.py`/`download_hydrograph.py` and the ingestion pipelines have been run locally.
+`download_landcover.py`/`download_hydrograph.py`/`download_flood_extent.py` and the ingestion pipelines
+have been run locally.
 
 ## Engine design notes (steps 1-2)
 
@@ -553,8 +628,13 @@ First version (deliberately simpler than the TCC's full documented model): redis
 7. **Docker Compose** *(done)* — containerize backend + frontend + static data volume.
 8. **Real timestep (`dt`) derivation** *(done)* — `compute_stable_dt` derives a real `dt` from Manning flow velocities under a CFL-style stability condition, using the real `dx = 30m` cell size already established in step 3. See "Step 8 done" above for the full design (source-cell velocity convention, adaptive recomputation, the `dt ∝ dx^(3/2)` identity, and the zero-velocity fallback).
 9. **Real driving hydrograph, wired end-to-end** *(done)* — the real May 2024 ANA/SGB gauge record for station `86879300` now drives an open-system `gauge_driven` mode reachable through `POST /simulations`/the WebSocket stream and the frontend's mode toggle. See "Step 9 done" above for the full design (the real-`Vazao`-instead-of-researched-curve pivot, the boundary-inflow-edge correction, the dt-clamp/tolerance fixes, and the known limitations — no full run observed to completion yet, no outlet boundary, event-loop blocking — carried forward to steps 10/11 below).
-10. **CSI/RMSE validation against real events** *(current step)* — ingest SGB/CPRM's stage-indexed flood-extent shapefiles (and HWM/SWOT ground truth where available) for the 2023/2024 events, and implement CSI (spatial overlap between simulated and observed flooded extent) and RMSE (depth, where ground-truth depth exists) in the already-scaffolded `validation/` module. **Must first deliberately address step 9's closed-boundary/no-outlet limitation** (a full gauge-driven run floods the entire ROI at ~288m mean depth against a 96m max terrain elevation) — CSI against the real observed extent is not meaningful otherwise.
-11. **Performance benchmarking** — vectorized NumPy vs. loop-based comparison, exploratory CuPy/GPU, run against the real event replay from steps 9–10.
+10. **CSI validation against real events** *(done)* — real SGB/CPRM flood-extent ground truth for Lajeado
+    (a public ArcGIS REST MapServer, indexed by river stage) ingested and rasterized onto the engine's
+    grid; CSI/Hit Rate/False Alarm Rate implemented in `validation/metrics.py`; a real gauge-driven run
+    through the actual May 2024 peak scored **CSI 0.133** against it. RMSE (depth vs. HWM/SWOT) is
+    deliberately deferred - see "Step 10 done" above and `docs/tcc-deviations.md` sections 12-13 for the
+    full design and both decisions.
+11. **Performance benchmarking** *(current step)* — vectorized NumPy vs. loop-based comparison, exploratory CuPy/GPU, run against the real event replay from steps 9–10.
 
 Update the "Current status" section above as steps complete — this file is meant to be read at the start of future sessions instead of re-deriving the plan from scratch.
 

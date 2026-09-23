@@ -3,7 +3,7 @@ import pytest
 import rasterio
 from rasterio.transform import from_bounds
 
-from ingestion.dem import crop_nodata_border, fill_sinks, reproject_to_target_crs
+from ingestion.dem import build_elevation_matrix, crop_nodata_border, fill_sinks, reproject_to_target_crs
 
 
 def test_fill_sinks_removes_artificial_pit():
@@ -96,3 +96,38 @@ def test_reproject_to_target_crs_produces_square_pixels(tmp_path):
         res_x, res_y = ds.res
         assert res_x == pytest.approx(30.0)
         assert res_y == pytest.approx(30.0)
+
+
+def test_build_elevation_matrix_honors_resolution_override(tmp_path):
+    """Regression for roadmap step 10's validation grid: build_elevation_matrix's
+    `resolution` kwarg must actually reach reproject_to_target_crs, not just sit
+    unused - a coarser resolution must produce a coarser (smaller-shape) grid over
+    the same real-world extent."""
+    rows, cols = 60, 60
+    src_path = tmp_path / "src.tif"
+    transform = from_bounds(-51.99, -29.505, -51.93, -29.455, cols, rows)
+    data = np.linspace(0, 100, rows * cols, dtype="float32").reshape(rows, cols)
+
+    with rasterio.open(
+        src_path,
+        "w",
+        driver="GTiff",
+        height=rows,
+        width=cols,
+        count=1,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=transform,
+        nodata=-32768.0,
+    ) as dst:
+        dst.write(data, 1)
+
+    fine = build_elevation_matrix(
+        raw_path=src_path, processed_path=tmp_path / "z_30m.tif", resolution=30.0
+    )
+    coarse = build_elevation_matrix(
+        raw_path=src_path, processed_path=tmp_path / "z_90m.tif", resolution=90.0
+    )
+
+    assert coarse.shape[0] < fine.shape[0]
+    assert coarse.shape[1] < fine.shape[1]
