@@ -111,7 +111,10 @@ def _run_to_peak(peak_elapsed_seconds: float) -> None:
     print(f"max simulated depth: {H.max():.2f}m")
 
     simulated_mask = H > _FLOODED_DEPTH_THRESHOLD_M
-    observed_mask = build_observed_flood_mask(reference_path=settings.DEM_PROCESSED_PATH)
+    observed_mask = build_observed_flood_mask(
+        reference_path=settings.DEM_PROCESSED_PATH,
+        processed_path=settings.FLOOD_EXTENT_PROCESSED_PATH,
+    )
 
     print(f"simulated flooded cells: {simulated_mask.sum()} of {simulated_mask.size} ({100 * simulated_mask.mean():.1f}%)")
     print(f"observed flooded cells:  {observed_mask.sum()} of {observed_mask.size} ({100 * observed_mask.mean():.1f}%)")

@@ -138,6 +138,13 @@ SGB_LAJEADO_MAPSERVER_URL = "https://geoportal.sgb.gov.br/server/rest/services/L
 FLOOD_EXTENT_LAYER_ID = 18
 FLOOD_EXTENT_SOURCE_CRS = "EPSG:4674"  # SIRGAS 2000 geographic - same family as the DEM's raw EPSG:4326
 FLOOD_EXTENT_RAW_PATH = RAW_DIR / "lajeado_flood_extent_cota3367cm.geojson"
+# Mirrors DEM_PROCESSED_PATH/LANDCOVER_PROCESSED_PATH's no-suffix-means-30m
+# convention below - kept distinct from FLOOD_EXTENT_VALIDATION_PROCESSED_PATH
+# (90m) so a 30m caller (examples/benchmark_30m_gauge_driven.py) and the 90m
+# validation script (examples/validate_may2024.py) can never collide on the
+# same output file regardless of run order, even though both ultimately call
+# the same `build_observed_flood_mask` with only `reference_path` overridden.
+FLOOD_EXTENT_PROCESSED_PATH = PROCESSED_DIR / "lajeado_flood_extent.tif"
 
 # Roadmap step 10's validation run uses 90m resolution, not the officially-served
 # 30m grid above (TARGET_RESOLUTION_METERS) - a deliberate wall-clock tradeoff for
