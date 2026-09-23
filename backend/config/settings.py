@@ -124,6 +124,32 @@ CORS_ALLOWED_ORIGINS = os.environ.get(
     "CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
 ).split(",")
 
+# Roadmap step 10 (CSI validation): SGB/CPRM (via IPH-UFRGS) publishes real
+# HEC-RAS-2D-modeled flood-extent polygons for Lajeado, indexed by river stage,
+# as a public, no-auth ArcGIS REST MapServer - the same "direct scriptable API,
+# no portal scraping" pattern already used for OPENTOPOGRAPHY_API_URL and
+# MAPBIOMAS_LULC_URL_TEMPLATE above. Layer 18 (COTA_3367cm, stamped 33.67m) sits
+# between the 33.00m and 34.00m per-meter layers and matches the real May 2024
+# peak stage this project's own hydrograph already uses (TCC-documented as
+# 33.66m) - the natural CSI comparison target. Confirmed live 2026-09-21;
+# querying it must NOT include a `resultRecordCount` param, which 400s
+# ("Pagination is not supported").
+SGB_LAJEADO_MAPSERVER_URL = "https://geoportal.sgb.gov.br/server/rest/services/LAJEADO/MapServer"
+FLOOD_EXTENT_LAYER_ID = 18
+FLOOD_EXTENT_SOURCE_CRS = "EPSG:4674"  # SIRGAS 2000 geographic - same family as the DEM's raw EPSG:4326
+FLOOD_EXTENT_RAW_PATH = RAW_DIR / "lajeado_flood_extent_cota3367cm.geojson"
+
+# Roadmap step 10's validation run uses 90m resolution, not the officially-served
+# 30m grid above (TARGET_RESOLUTION_METERS) - a deliberate wall-clock tradeoff for
+# this one-off validation script, documented in docs/tcc-deviations.md. A full 30m
+# gauge-driven run takes hours (see step 9's known limitations in
+# docs/project-plan.md); these paths are entirely separate from
+# DEM_PROCESSED_PATH/LANDCOVER_PROCESSED_PATH and never touched by the live API.
+VALIDATION_RESOLUTION_METERS = 90.0
+DEM_VALIDATION_PROCESSED_PATH = PROCESSED_DIR / "lajeado_estrela_z_90m.tif"
+LANDCOVER_VALIDATION_PROCESSED_PATH = PROCESSED_DIR / "lajeado_estrela_n_90m.tif"
+FLOOD_EXTENT_VALIDATION_PROCESSED_PATH = PROCESSED_DIR / "lajeado_flood_extent_90m.tif"
+
 
 def get_opentopography_api_key() -> str:
     """Read the OpenTopography API key from the environment.

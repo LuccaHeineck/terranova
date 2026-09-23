@@ -142,16 +142,23 @@ def fill_sinks(elevation: np.ndarray) -> np.ndarray:
 def build_elevation_matrix(
     raw_path: Path = settings.DEM_RAW_PATH,
     processed_path: Path = settings.DEM_PROCESSED_PATH,
+    resolution: float = settings.TARGET_RESOLUTION_METERS,
 ) -> np.ndarray:
     """Run the full raw-GeoTIFF -> reproject -> crop -> sink-fill -> Z-array pipeline.
 
     Also persists the final result to `processed_path` as a GeoTIFF. The
     intermediate reprojected raster is scratch - it lives in a temp dir, not
     `data/processed/`, since only the final filled result is a real pipeline output.
+
+    `resolution` defaults to the officially-served grid's resolution
+    (`settings.TARGET_RESOLUTION_METERS`, 30m) so every existing caller is
+    unaffected; roadmap step 10's validation script passes
+    `settings.VALIDATION_RESOLUTION_METERS` (90m) to build a separate, coarser
+    grid for a one-off validation run without touching the live 30m pipeline.
     """
     with tempfile.TemporaryDirectory() as tmp_dir:
         reprojected_path = Path(tmp_dir) / "reprojected.tif"
-        reproject_to_target_crs(raw_path, reprojected_path)
+        reproject_to_target_crs(raw_path, reprojected_path, resolution=resolution)
 
         with rasterio.open(reprojected_path) as src:
             elevation = src.read(1).astype(np.float64)
