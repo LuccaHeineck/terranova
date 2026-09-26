@@ -80,7 +80,7 @@ def _run_to_peak(peak_elapsed_seconds: float) -> None:
             Z,
             H,
             N,
-            outflow_fraction=outflow_fraction_for_dt(0.5, dt, dt_cfl),
+            outflow_fraction=outflow_fraction_for_dt(0.085, dt, dt_cfl),
             inflow=inflow,
             boundary_elevation=boundary_elevation,
             boundary_roughness=boundary_roughness,

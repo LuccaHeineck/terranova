@@ -436,6 +436,22 @@ missed a failure mode a single visual check against real data caught immediately
 stability changes to `simulation/engine.py` should include a real-terrain check (not just the two
 synthetic grids) before being considered validated, not as an afterthought.
 
+**Addendum (later session): a corrected runtime estimate, and a real file-collision bug fixed.** The
+full 14-day, 30m-resolution gauge-driven run's wall-clock estimate was revised sharply upward: earlier
+framing put it around ~9 hours, but direct measurement on the committed ROI put the real figure closer
+to **45–49 hours** — the ~9h figure was itself an underestimate, not a target this section's negative
+results failed to reach. This doesn't change the diagnosis above (`dt` is correctly CFL-adaptive; the
+substep decomposition remains the identified, unresolved bottleneck) or its conclusion — GPU/CuPy
+remains the only untested lever, scheduled for Q10 (October) per TCC1's own Quadro 7, not attempted in
+this session. Separately, a real bug was found and fixed while working in this area:
+`examples/benchmark_30m_gauge_driven.py` was silently overwriting the 90m validation flood-extent mask
+(`lajeado_flood_extent_90m.tif`) under the same filename convention `validate_may2024.py` uses, because
+both ultimately call `build_observed_flood_mask` with only `reference_path` overridden. Fixed by giving
+the 30m path its own distinct constant, `settings.FLOOD_EXTENT_PROCESSED_PATH`
+(`lajeado_flood_extent.tif`, no `_90m` suffix, mirroring the existing
+`DEM_PROCESSED_PATH`/`LANDCOVER_PROCESSED_PATH` no-suffix-means-30m convention) — verified no collision
+regardless of run order.
+
 ---
 
 ## 14. Not yet built, relative to TCC1's stated plan (as of this session)
@@ -464,6 +480,284 @@ synthetic grids) before being considered validated, not as an afterthought.
   describes at all; TCC1's own informal PoC validation was print-statement/manual-inspection based
   (Quadro 6's metrics table). Worth mentioning in the write-up as a methodological upgrade in TCC II
   over TCC1's own informal validation approach, not a deviation in the "diverged from the plan" sense.
+
+---
+
+## 15. Outlet-margin sensitivity investigation (exploratory, step 10 follow-up) — a negative result
+
+**Context, not itself a TCC1 comparison point**: step 10's real CSI score (0.133) reflects a simulation
+that under-predicts flood *width* — a narrow channel-hugging plume against a much wider real observed
+floodplain — with the outlet boundary condition's fixed drainage margin (section 11 above,
+`_CHANNEL_ELEVATION_MARGIN_METERS`, used as `find_boundary_outlet`'s `drop_m` default) named there as a
+real candidate contributor, alongside a separately-observed sensitivity of this validation to small
+pixel-registration shifts (a 1-3 cell shift alone was independently found to move CSI from 0.133 to
+0.279). This section tests the drainage-margin half of that explanation as an isolated variable.
+
+**What was tested**: `find_boundary_outlet` already exposes `drop_m` (how far below its own elevation
+each outlet cell's "virtual outside" sits — the actual head difference driving outflow through the
+outlet) independently of `margin_m` (which boundary cells count as "channel" at all). `drop_m` was swept
+across `{0.01, 0.5, 1.0, 2.0 (current default), 5.0, 10.0, 20.0}` at 90m resolution via new, additive
+`--outlet-drop-m`/`--results-json`/`--save-masks` CLI flags on `examples/validate_may2024.py` (all
+default to exactly today's behavior when omitted — no change to any live default constant), with
+`margin_m` and every other parameter (Manning's `N`, `outflow_fraction`, resolution, ROI) held fixed so
+the exact same set of outlet cells was used in every run.
+
+**Result — CSI is essentially flat across the whole range**: 0.13327 (0.01/0.5/2.0/10.0m, an exact
+four-way tie), 0.13315 (1.0/5.0m, an exact tie one step lower), and 0.13411 at the 20.0m extreme — a
+total spread of **0.00096** across a 2,000x range of the lever itself, from a near-zero/no-drainage
+extreme to 10x the default. Hit Rate is bit-for-bit identical (0.1793020457280385) in *every* variant:
+the outlet only ever touches a handful of south-edge channel cells, so it can shift a few marginal cells
+between False Positive/Negative, but the narrow simulated plume's own True Positive footprint — the
+actual real-flooded cells it does reach — never changes at all. This directly confirms the modeling
+diagnosis: the drainage margin governs how much water reaches the outlet, not how *wide* the plume gets
+on the way there, so it was never going to be the lever that closes the width gap.
+
+**Noise-floor check (required before trusting any apparent win, and none was found)**: the shift-search
+cross-correlation method (shift the simulated mask by every `(dy, dx) ∈ [-3,3]×[-3,3]`, recompute CSI at
+each offset, keep the best) was re-run against both the default (2.0m) baseline and the nominal
+best-scorer (20.0m). Both show closely matching shift-sensitivity: 2.0m goes 0.1333 → 0.2792 (+0.1459) at
+`(dy=-1, dx=-3)`; 20.0m goes 0.1341 → 0.2773 (+0.1432) at the identical offset — reproducing the
+earlier-reported 0.133 → 0.279 jump closely enough to confirm this is the same effect, not a different
+artifact. **The entire margin-driven CSI spread (0.00096) is roughly two orders of magnitude smaller than
+what a single small registration shift alone produces (+0.14-0.15) on this exact setup.** This is the
+key methodological point worth stating plainly, not as a caveat: for this thin, sparse flood mask at 90m
+resolution, small-scale registration/alignment noise is a *larger* source of CSI variance than a real
+physical parameter's entire plausible range — a future reader comparing CSI values from this validation
+across any single-parameter change should treat differences well under ~0.1 as statistically
+indistinguishable from alignment noise, not as evidence the change mattered.
+
+**Conclusion — a valid negative result, not escalated**: per this task's own stopping rule, no variant
+cleared the noise floor, so no live default constant was touched (the CLI flags are purely additive to
+an existing example script), and the investigation was not escalated to ROI widening or finer resolution
+even though the result was inconclusive-by-itself for the width under-prediction question — both remain
+legitimate directions for separate future work, deliberately not attempted here. `.venv/bin/pytest tests/`
+passes unchanged (84/84) since no default behavior changed.
+
+---
+
+## 16. May 2024 CSI validation — full investigation of the CSI 0.133 under-prediction (step 10 follow-ups, several sessions)
+
+**Context.** Step 10's original result (`docs/project-plan.md`'s "Step 10 done") was **CSI 0.133 / Hit
+Rate 0.179 / FAR 0.658** at 90m resolution, default/uncalibrated parameters, scored against SGB/CPRM's
+`COTA_3367cm` reference flood polygon for the real May 2024 event. This section is a single consolidated
+account of everything investigated since then, replacing several sessions' worth of incremental
+"continuation" entries that had made it hard to follow. It is organized by explanation, not by session:
+what was ruled out, what the real cause turned out to be, how it was corrected, what physical lever was
+separately calibrated, and where the search for better reference data landed.
+
+### 16.1 Six alternative explanations ruled out, each with direct evidence
+
+1. **CRS/coordinate/projection bug** — ruled out. The simulated grid and the reference mask are
+   byte-identical in CRS, affine transform, and shape.
+2. **Rasterization/indexing bug** — ruled out via two direct tests: a pixel-alignment check (exact match
+   across sample points) and an `all_touched` sensitivity check (a real effect on cell count, but roughly
+   10x too small in magnitude to explain the CSI jump the shift-search noise-floor check in §16.3 finds).
+3. **Outlet drainage margin** (`_CHANNEL_ELEVATION_MARGIN_METERS`) — ruled out; see §15 above (a 200x
+   sweep, Hit Rate bit-for-bit identical at every value tested — this lever only touches a handful of
+   boundary cells and cannot affect which real flooded cells the model reaches).
+4. **Clock-time-cutoff artifact** (the model stopping before reaching the real peak stage) — ruled out
+   via gauge-cell WSE tracking. The real gauge (ANA station `86879300`, "ESTRELA") was geolocated via
+   ANA's public `HidroInventario` API (lat `-29.4717`/lon `-51.965`) and inverted through the validation
+   grid's affine transform to grid cell row 20/col 26 (`Z=16.0m`) — now
+   `settings.VALIDATION_GAUGE_ROW`/`VALIDATION_GAUGE_COL`, so this doesn't need re-deriving from a
+   scratchpad script again. The DEM-vs-gauge vertical datum is separately confirmed unresolvable (ANA's
+   published station `Altitude`, `-0.6m`, is implausible against local channel-bed elevations), so only
+   relative, same-run WSE dynamics are trustworthy, not absolute stage comparisons. An initial read using
+   windows too fine (tens of minutes) misread short-term noise as a plateau; corrected with five ~5.3-hour
+   windows across the last 20% of elapsed time, the gauge-cell WSE was still actively, monotonically
+   rising — not settling — when the run stops at the real peak's elapsed time. Not a timing-cutoff
+   artifact.
+5. **Initial condition (dry-grid start, `H=0`)** — ruled out. Seeded `H` with a physically-derived
+   baseline depth from Manning's equation using the pre-flood baseline discharge (2,251.8 m³/s, the flat
+   period before the rise), deliberately avoiding the unresolved vertical datum from (4). The seeded
+   volume was ~0.15% of total event inflow and washed out well before the peak — negligible effect.
+6. **Depth-classification threshold** (`_FLOODED_DEPTH_THRESHOLD_M`) — ruled out via depth histograms of
+   false-positive vs. true-positive cells: statistically indistinguishable (both median ~9–10m deep),
+   ruling out "shallow edge cells" as the FP mechanism.
+
+### 16.2 The real finding: a reference-data scope gap, not a model error
+
+False-positive cells were concentrated in a large, contiguous, terrain-consistent region — elevation-
+identical to the correctly-matched true-positive band — that turned out to be **Estrela's side of the
+river** (the ROI straddles Lajeado and Estrela). A stage-invariance test confirmed this directly:
+querying three SGB stage layers (`COTA_1900cm` 19.00m near-baseflow, `COTA_2600cm` 26.00m mid,
+`COTA_3367cm` 33.67m peak), the same 48 cells on Estrela's side are flooded-or-not identically at every
+one — that side is frozen at "permanent channel only" in the reference data, regardless of real water
+level, while Lajeado's side grows normally across the same three stages (106 → 430 → 783 cells).
+
+**Root cause, confirmed via external research**: SGB's flood-alert modeling system for this reach was
+specifically commissioned for **Lajeado** municipality — built from Lajeado's own bathymetric
+cross-sections and aerial photogrammetry, calibrated against Lajeado-side flood records from 2007–2024.
+Estrela's DEM was used only as a supporting terrain input, never independently validated as its own
+flood target. This explains both the service's naming (`SGB_LAJEADO_MAPSERVER_URL`) and its behavior
+precisely — a genuine reference-data scope limitation, not a project or modeling error.
+
+**A labeling bug, caught and corrected before being trusted.** An early version of this diagnosis had
+the Lajeado/Estrela labels swapped, due to a calibration bug in `check_riverbank_coverage.py`'s
+bank-identity logic against the real ANA gauge cell (it assumed the gauge cell's own side was Estrela's,
+when the gauge actually sits on Lajeado's bank — Estrela is the side *opposite* the gauge). The same swap
+was duplicated into `rescore_stage_invariant.py`'s own bank classifier, which uses the label to decide
+*which* side's cells get excluded, not just which name gets printed, making this a real risk of a
+substantive bug rather than a cosmetic one. Both were corrected; the "before/after" scores were
+numerically identical only by coincidence (a double negation in the original code happened to cancel out
+to the physically correct side despite the wrong label) — this was not taken on faith but independently
+audited: the bank split was recomputed fresh from the corrected label and cross-checked cell-for-cell
+against `check_riverbank_coverage.py`'s own independently-derived figures (2,280 of 3,073 domain-wide
+frozen-dry cells on Estrela's side, matching exactly).
+
+**A degenerate correction, tried first and explicitly rejected.** Excluding *every* stage-invariant cell
+domain-wide (not scoped to Estrela) looks like the natural generalization, but is mathematically
+degenerate: SGB's three stage layers turn out to be perfectly nested (a cell flooded at a lower stage is
+always flooded at every higher one), so "frozen across all three stages" and "dry at the peak stage" are
+the *same set* under nesting — meaning the domain-wide valid mask can never contain a cell that is both
+valid and observed-dry, forcing False Positives to exactly zero at every parameter value regardless of
+how the simulation actually performs (confirmed: domain-wide-corrected FAR is `0.0000` and CSI equals
+Hit Rate bit-for-bit everywhere). This is a mask-construction artifact, not a usable correction, and is
+recorded here so it isn't rediscovered by a future pass at this same dataset.
+
+**The real, usable correction — disaggregated into two independent parts, not bundled.**
+1. **Estrela-gap-only**: excludes only the 2,280 confirmed Estrela-side frozen-dry cells (the real
+   coverage gap). This is the clean, independently-verified, bank-specific correction.
+2. **Bundled**: the above *plus* a separate, non-bank-specific removal of all 154 domain-wide
+   frozen-flooded (permanent-channel) cells — of which the majority (106, 68.8%) actually sit on
+   **Lajeado's** side, not Estrela's. Bundling this in removes real True Positive credit without
+   addressing the coverage gap, and was found to *understate* the correction at the calibration
+   plateau's peak (`0.878` vs. the properly-isolated `0.900`) and to fabricate an apparent regression at
+   the documented default that isn't real. **Estrela-gap-only is the number to cite; bundled is reported
+   alongside it for transparency, not used as "the" correction.**
+
+Visual confirmation (`rescore_stage_invariant.py --out-png`): under the Estrela-gap-only mask, the
+observed and simulated flood panels are visually near-identical within the valid region, with a clean,
+thin fringe of false negatives/positives tracing the boundary of a large solid true-positive mass —
+categorically different from the naive metric's confusion map, which shows a single, large,
+geographically distinct FP blob entirely separate from the true-positive band (the same blob a separate
+diagnostic, `characterize_fp_region.py`, first isolated as a possible coverage question, now confirmed
+to be the Estrela gap directly).
+
+### 16.3 A second, real lever: `outflow_fraction` (interior redistribution rate)
+
+`outflow_fraction` (hard-coded `0.5` in every caller — `step()`'s default, `validate_may2024.py`'s base
+value — never tuned against real event data, originally chosen only for numerical stability during early
+development) turned out to be non-monotonic with CSI, with a real interior maximum. A broad sweep
+followed by a two-stage densification localized a **broad, flat plateau in `[0.07, 0.1]`**, nominal peak
+at **`0.085`**.
+
+**Mechanism**: the default (`0.5`) redistributes water toward the outlet too quickly, producing a
+narrow, channel-hugging plume that misses most of the real floodplain (low Hit Rate, high FN). Slower
+redistribution lets water pool and spread laterally before draining — closer to what the real event's
+width required. Below the plateau (toward `0.05`), the plume overshoots the real floodplain boundary
+instead (Hit Rate climbs to `0.988`, but simulated extent balloons to 57.7% of the ROI against the real
+21.3%, so FP growth outpaces the recall gain and CSI turns back down).
+
+**Confirmed clean, not a stability/accuracy tradeoff**: checkerboard roughness (the same metric
+`test_engine.py`'s regressions use) is *lowest*, not highest, at the better-scoring, low-`outflow_fraction`
+end — the better-scoring variants are also the more numerically stable ones. A visual check of every
+swept variant's depth field found smooth, coherent plumes with no checkerboard/mottling artifact anywhere
+in the range.
+
+**Noise-floor checked at `0.085`** (the shift-search cross-correlation method: shift the simulated mask
+by every `(dy,dx) ∈ [-3,3]×[-3,3]`, recompute CSI, keep the best): shift-sensitivity is `+0.0000` — the
+raw score is not improved by any registration shift at all, the single most registration-robust point
+found anywhere in this whole investigation.
+
+Rescoring the same 13-point sweep (already on disk, no new runs) under naive vs. Estrela-gap-only vs.
+bundled scoring:
+
+| `outflow_fraction` | naive CSI | **Estrela-gap-only CSI** | bundled CSI |
+|---|---|---|---|
+| 0.05 | 0.363 | 0.848 | 0.819 |
+| 0.07 | 0.390 | 0.891 | 0.868 |
+| **0.085** | 0.395 | **0.900** | 0.878 |
+| 0.1 | 0.390 | 0.870 | 0.841 |
+| 0.115 | 0.383 | 0.836 | 0.800 |
+| 0.13 | 0.374 | 0.800 | 0.755 |
+| 0.15 | 0.358 | 0.754 | 0.699 |
+| 0.2 | 0.323 | 0.662 | 0.588 |
+| 0.3 | 0.221 | 0.406 | 0.314 |
+| 0.5 (previous default) | 0.133 | 0.179 | 0.059 |
+| 0.6 | 0.113 | 0.139 | 0.018 |
+| 0.7 | 0.110 | 0.128 | 0.010 |
+| 0.8 | 0.101 | 0.116 | 0.006 |
+
+`0.085` remains the top scorer under both naive and gap-only scoring — the correction doesn't shift
+which value is best, it widens the separation from its neighbors into a clearer peak (naive top-3 spread
+`0.0054`, within this validation's own noise floor; gap-only top-3 spread `0.0299`, a real widening). The
+Estrela-gap-only correction is uniformly non-negative at every swept point (it can only remove potential
+FPs, never TP/FN credit), so there is no two-sided finding here once bundled and gap-only are properly
+separated.
+
+### 16.4 Final result
+
+At `outflow_fraction=0.085` (confusion counts TP=789, FP=1167, FN=42 naively): naive CSI is **0.3949** —
+already a 3x improvement over step 10's `0.133` from calibration alone. Applying the Estrela-gap-only
+correction (FP drops from 1167 to 46; TP/FN untouched, since a dry-cell exclusion can only remove
+potential false positives) gives **CSI 0.8997** — the number to cite as the validated result.
+
+**Adopted as the live default.** This calibration decision has now been implemented:
+`outflow_fraction=0.085` is the deployed default in `step()` (`simulation/engine.py`), `POST
+/simulations` (`api/routers/simulations.py`), and the frontend's `ConfigPanel` initial value —
+replacing the old, never-tuned `0.5` everywhere it operated as the assumed live value, including the
+one-off `examples/benchmark_30m_gauge_driven.py` script. `examples/validate_may2024.py` deliberately
+keeps its own `base_outflow_fraction=0.5` default (its `--outflow-fraction` flag already makes it
+independently overridable) so an unflagged run continues to reproduce the original step-10 baseline
+for comparison, rather than silently drifting to a different number. `.venv/bin/pytest tests/` passes
+84/84 unchanged after the flip — every test that calls `step()` without an explicit
+`outflow_fraction` asserts a property (mass conservation, non-negative depth, a checkerboard-roughness
+threshold, directional-steering ratios) that holds for any valid fraction, not a value pinned to the
+old default. No other parameter (Manning's `N`, the outlet drainage margin, resolution) was touched.
+
+### 16.5 Search for independent Estrela-side reference data
+
+Given the reference-data limitation in §16.2, five independent sources were checked for real flood-extent
+coverage of Estrela's side, in order:
+
+1. **Copernicus EMSN194** (Risk & Recovery Mapping, requested by UFRGS) — ruled out. Covers the Porto
+   Alegre/Canoas metro area, ~94km from the ROI, zero overlap.
+2. **Copernicus EMSR720** (Rapid Mapping, statewide RS floods activation) — ruled out. All 5 AOIs are
+   upstream in the Serra Gaúcha (Guaporé, Encantado, Roca Sales, Santa Tereza, Das Antas Dam), closest
+   ~17.6km away, zero overlap.
+3. **Copernicus Global Flood Monitoring** (GFM, automated Sentinel-1-based, global archive since 2015) —
+   checked, no usable coverage/signal found for this reach.
+4. **SWOT satellite** (NASA/CNES) — the one source that worked. A Raster granule from pass 014/533
+   (6 May 2024, UTM zone 22J) geometrically covers the full ROI including Estrela. Reprojected onto the
+   project's 90m grid, Estrela-side `water_frac` shows real, non-frozen variation (mean 0.274, std
+   0.294, 18.9% classified wet at >50% threshold) — comparable in magnitude to Lajeado's in the same
+   pass (mean 0.250, 15.1% wet), corroborating that Estrela genuinely experienced flooding of a similar
+   order rather than the CA model over-predicting there.
+5. **Related literature**: the paper cited in this project's own TCC1 (Sales et al. 2025) turned out to
+   be about point-level SWOT virtual gauging stations, not extent mapping. Two more directly relevant
+   2025 papers were found (Simoes-Sousa et al., WHOI/GRL, with a public Zenodo dataset; Laipelt et al.,
+   GRL, co-authored by the same IPH-UFRGS researchers — Collischonn and Ruhoff — behind SGB's own Lajeado
+   product) — the successful SWOT raster check traces to this lead.
+
+**Caveats, stated plainly**: most of the Estrela-side SWOT signal is flagged "suspect" quality (81.6%)
+rather than "good" (3.6%) per the product's own quality metadata, and the usable pass is 6 May — four
+days after the 2 May peak (recession limb), not a peak-stage comparison.
+
+**Decision**: SWOT is adopted as corroborating evidence for the discussion/limitations narrative
+(independent confirmation that Estrela flooded, supporting the reference-data-gap interpretation over a
+model-over-prediction interpretation) — **not** integrated as a formal secondary CSI metric. The cost of
+building quality-flag-aware masking and formal temporal-mismatch handling for a single suspect-quality,
+off-peak pass was judged not worth what it would add. This closes the search for alternative reference
+data: five independent sources checked is a thorough, documented search, not an abandoned effort.
+
+---
+
+## 17. Planned architectural direction: hybrid temporal + non-temporal engine (not yet implemented)
+
+**Context**: following the runtime and CSI difficulties above (§13, §16), a hybrid direction was decided
+for the engine's future architecture — this is a design decision made this session, not implemented
+code, and should not be read as a completed step.
+
+**Direction**: keep the existing temporal, CFL-based CA engine as the core model. It is the project's
+differentiator against Torres et al. 2022's non-temporal classification approach — it captures wave-front
+arrival timing, which a non-temporal model cannot — and stays the primary validated model. Alongside it,
+add a second, separate, explicitly-labeled **non-temporal fast classification mode** (Torres-style
+elevation-ordered classification), documenting the speed/accuracy trade-off between the two rather than
+replacing the temporal model with the faster one.
+
+**Status**: design-stage only. Not implemented, not yet assigned to a specific roadmap step — noted here
+as planned future work so it isn't lost between sessions.
 
 ---
 

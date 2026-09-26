@@ -105,7 +105,7 @@ def step(
     Z: np.ndarray,
     H: np.ndarray,
     N: np.ndarray,
-    outflow_fraction: float = 0.5,
+    outflow_fraction: float = 0.085,
     inflow: np.ndarray | None = None,
     boundary_elevation: np.ndarray | None = None,
     boundary_roughness: np.ndarray | None = None,

@@ -517,11 +517,154 @@ time — closing the gap the outlet-boundary work above flagged as a prerequisit
   test in `test_ingestion.py` (`build_elevation_matrix`'s `resolution` override actually changes the
   output grid shape). Full suite: 70/70 passing.
 
+**Outlet-margin sweep investigated (exploratory, alongside step 11) — negative result.** Step 10's
+CSI 0.133 under-predicts flood width (a narrow channel-hugging plume vs. a much wider real floodplain),
+and the outlet's fixed drainage margin (`_CHANNEL_ELEVATION_MARGIN_METERS`, used by
+`ingestion/hydrograph.py::find_boundary_outlet`'s `drop_m` parameter — how far below its own elevation
+each outlet cell's "virtual outside" sits) was named as a real candidate contributor. Tested as a single,
+isolated lever: `examples/validate_may2024.py` gained optional `--outlet-drop-m`/`--results-json`/
+`--save-masks` CLI flags (additive, defaulting to today's exact behavior — `find_boundary_outlet`'s other
+parameter, `margin_m`, which boundary cells count as "channel," was left untouched throughout, so every
+variant drains through the identical set of outlet cells), then re-run at 90m resolution across
+`drop_m ∈ {0.01, 0.5, 1.0, 2.0 (default), 5.0, 10.0, 20.0}` — from a near-zero/minimal-drainage extreme
+to 10x the default — with every other parameter (Manning's `N`, `outflow_fraction`, resolution, ROI)
+unchanged:
+
+| `drop_m` | CSI | Hit Rate | FAR | max depth (m) | % flooded (sim) | wall-clock (min) |
+|---|---|---|---|---|---|---|
+| 0.01 | 0.13327 | 0.17930 | 0.65826 | 15.03 | 11.168% | 46.0 |
+| 0.5 | 0.13327 | 0.17930 | 0.65826 | 16.66 | 11.168% | 42.5 |
+| 1.0 | 0.13315 | 0.17930 | 0.65904 | 16.54 | 11.194% | 29.8 |
+| 2.0 (default) | 0.13327 | 0.17930 | 0.65826 | 16.50 | 11.168% | 23.2 |
+| 5.0 | 0.13315 | 0.17930 | 0.65904 | 15.62 | 11.194% | 44.2 |
+| 10.0 | 0.13327 | 0.17930 | 0.65826 | 15.72 | 11.168% | 40.9 |
+| 20.0 | **0.13411** | 0.17930 | 0.65268 | 15.32 | 10.989% | 23.2 |
+
+(The 2.0m default row reproduces step 10's exact numbers — CSI 0.13327, 82,933 steps — confirming the
+sweep harness is faithful to the original run.) Hit Rate is **exactly identical across every single
+variant** (0.1793020457280385, bit-for-bit) — the outlet only touches a handful of south-edge channel
+cells, so it can shift a few marginal cells' False Positive/Negative status but never touches which real
+flooded cells the narrow simulated plume actually reaches. CSI's entire spread across the whole swept
+range, including the deliberately unrealistic near-zero extreme, is **0.00096** (0.13315 to 0.13411) —
+essentially flat, and not even monotonic with `drop_m` (0.01/0.5/2.0/10.0 tie exactly; 1.0/5.0 tie
+exactly at a slightly lower value; only the 20.0 extreme moves noticeably, and only by +0.0008 over the
+default).
+
+**Noise-floor check, required before trusting any of the above**: re-ran the shift-search
+cross-correlation method (shift the simulated mask by every `(dy, dx)` in `[-3,3] x [-3,3]`, recompute
+CSI at each offset, take the best) against both the default (2.0m) baseline and the nominally
+best-scoring variant (20.0m). Both reproduce closely the same shift-sensitivity: 2.0m goes
+0.1333 → 0.2792 (+0.1459) at a `(dy=-1, dx=-3)` shift; 20.0m goes 0.1341 → 0.2773 (+0.1432) at the
+identical offset — closely matching the earlier diagnostic's independently reported 0.133 → 0.279 jump,
+confirming this reimplementation is measuring the same effect. **The sweep's entire margin-driven CSI
+spread (0.00096) is roughly 150x smaller than what a 1-3 cell registration shift alone produces
+(+0.14–0.15) on this exact validation setup.** The outlet margin lever therefore does not clear the
+noise floor at any tested value — its effect on CSI is indistinguishable from measurement noise inherent
+to this thin, sparse-mask validation, not a real, actionable calibration target.
+
+**Conclusion — a valid negative result, not escalated further** (per this task's own stopping rule): the
+outlet's drainage margin is not, in fact, a meaningful lever for closing the width under-prediction gap;
+this validation setup's dominant source of CSI variance is small-scale registration/alignment
+sensitivity, not any single physical parameter tested here. No live default constant was changed (only
+the additive CLI flags on `validate_may2024.py`); `.venv/bin/pytest tests/` still passes (84/84). Widening
+the ROI (which would reopen the CRS/clipping verification work from step 10) remains a legitimate
+direction for a *future*, separate task — deliberately not attempted here, matching the stopping rule
+this task was scoped under.
+
+**May 2024 CSI validation — full investigation, final result (step 10 follow-up).** Step 10's original
+score (CSI 0.133, Hit Rate 0.179, FAR 0.658) was investigated across several sessions' worth of
+follow-up work, summarized here at its final state — full technical detail, all intermediate tables, and
+how the two threads below were found are in `docs/tcc-deviations.md` §16 (read that section first before
+any future work on this number, rather than re-deriving it from scratch).
+
+- **Six alternative explanations were checked and ruled out, each with direct evidence**: a
+  CRS/projection bug (simulated grid and reference mask are byte-identical in CRS/transform/shape); a
+  rasterization/indexing bug (pixel-alignment exact match; `all_touched` sensitivity real but ~10x too
+  small to explain the effect found); the outlet's drainage margin (§15-equivalent sweep — Hit Rate
+  bit-identical across a 200x range); a clock-time-cutoff artifact (gauge-cell WSE tracking showed the
+  model still actively, monotonically rising when the run stops, not settling); the dry-grid initial
+  condition (seeding a physically-derived Manning baseline depth had negligible effect, <0.15% of total
+  inflow, washed out well before the peak); and the depth-classification threshold (FP and TP cells are
+  statistically indistinguishable in depth).
+- **The real finding**: the SGB/CPRM reference dataset itself has a scope gap. Its flood-extent product
+  was built and calibrated specifically for Lajeado (its own bathymetry, aerial photogrammetry, and
+  2007–2024 flood records) — Estrela's DEM was only used as supporting terrain input, never
+  independently validated. A stage-invariance test (querying three SGB stage layers from near-baseflow
+  to peak) found the same 48 cells on Estrela's side flooded-or-not identically at every stage — i.e.
+  that side is frozen at "permanent channel only," not really modeled by SGB at all. Excluding just
+  those 2,280 confirmed Estrela-side frozen-dry cells from scoring (not a domain-wide exclusion, which is
+  a degenerate mask that forces FAR to zero — see `docs/tcc-deviations.md` §16.2) is the validated
+  correction.
+- **A second, real physical lever**: `outflow_fraction` (interior redistribution rate, hard-coded `0.5`,
+  never tuned) turned out non-monotonic with CSI — a two-stage sweep localized a broad plateau at
+  `[0.07, 0.1]`, nominal best `0.085`. The default drains too fast into a narrow, channel-hugging plume
+  that misses most of the real floodplain; slower redistribution lets water spread laterally first,
+  matching the real event's width.
+- **Final numbers**: at `outflow_fraction=0.085`, naive CSI is `0.395` (already 3x step 10's `0.133`);
+  with the Estrela reference-data correction properly applied (gap-only, not bundled with an unrelated
+  channel exclusion), **CSI is 0.8997** — the number to cite as the validated result. **This decision has
+  since been adopted as the live default** — see the "`outflow_fraction=0.085` adopted as the live
+  default" entry below.
+- **Search for independent Estrela-side reference data** (since the SGB gap above is a real limitation,
+  not something fixable from this project's own data): five sources checked — two Copernicus EMS
+  products ruled out on geography (zero ROI overlap), Copernicus GFM found no usable signal, and
+  NASA/CNES **SWOT** (a 6 May 2024 raster pass) worked — reprojected onto the validation grid, the
+  Estrela-side water fraction shows real flooding of a similar order to Lajeado's in the same pass,
+  corroborating the reference-data-gap interpretation over a model-over-prediction one. Mostly
+  "suspect"-quality pixels and four days past the real peak (recession limb, not peak-stage) — adopted
+  as corroborating evidence for the write-up's limitations discussion, not as a formal secondary CSI
+  metric. Full detail: `docs/tcc-deviations.md` §16.5.
+
+**`outflow_fraction=0.085` adopted as the live default.** The calibration finding above (a
+noise-floor-checked, SWOT-corroborated plateau `[0.07, 0.1]`, nominal peak `0.085`) is now implemented,
+not just investigated. Changed: `step()`'s own default (`backend/simulation/engine.py`), `POST
+/simulations`'s `outflow_fraction` field default (`backend/api/routers/simulations.py`), the frontend
+`ConfigPanel`'s initial form value (`frontend/src/components/ConfigPanel.tsx`), and the hardcoded value
+in the one-off `backend/examples/benchmark_30m_gauge_driven.py` benchmark script — the old, never-tuned
+`0.5` replaced with `0.085` everywhere it operated as the assumed live/operational value.
+`examples/validate_may2024.py` was deliberately left untouched: its own `base_outflow_fraction=0.5`
+default reproduces the original step-10 baseline run when no `--outflow-fraction` flag is given, which
+is exactly the reproducibility this script exists for. `.venv/bin/pytest tests/` passes 84/84
+unchanged after the flip (every test exercising the default asserts a fraction-independent property -
+mass conservation, non-negative depth, a checkerboard-roughness threshold - not a value pinned to the
+old default). A single, isolated parameter change - Manning's `N`, the outlet drainage margin, and
+resolution were not touched.
+
+**Runtime/performance status — still unresolved.** A full 14-day, 30m-resolution gauge-driven run was
+re-measured this session at **45–49 hours** (not the ~9h earlier estimate — a correction, not a
+regression). `dt` itself is correctly CFL-adaptive; the actual bottleneck is `step()`'s separate, older
+fixed 50x substep decomposition (`_MAX_STABLE_SUBSTEP_FRACTION`), fully decoupled from CFL `dt` and
+stacking multiplicatively with it (see `docs/tcc-deviations.md` §13, extended this session). Two fixes
+were tried and did not survive: `outflow_fraction_for_dt`'s exact dt-ratio scaling (kept — harmless,
+mathematically exact, but negligible real-world effect) and relaxing `_MAX_STABLE_SUBSTEP_FRACTION` to
+`0.02` (a real 1.85x speedup on synthetic benchmarks, reverted after producing a visible
+mottled/branching artifact on real gauge-driven terrain that neither synthetic test caught). **GPU/CuPy
+remains the primary untested lever, scheduled for Q10 (October) per TCC1's own Quadro 7 — not attempted
+in this session.** Separately, a real file-naming collision was found and fixed this session:
+`benchmark_30m_gauge_driven.py` was silently overwriting the 90m validation mask under the same
+filename; fixed via a new, distinct `settings.FLOOD_EXTENT_PROCESSED_PATH` constant — verified no
+collision regardless of run order.
+
+**Planned architectural direction (not yet implemented): hybrid temporal + non-temporal engine.**
+Following the runtime/CSI difficulties above, the plan is to keep the existing CFL-based temporal CA
+engine as the core model (its differentiator vs. Torres et al. 2022 — it captures wave-front arrival
+timing, which a non-temporal model can't) and add a second, separate, explicitly-labeled non-temporal
+fast classification mode (Torres-style elevation-ordered classification) alongside it, documenting the
+speed/accuracy trade-off rather than replacing the temporal model. Design-stage only — not implemented.
+See `docs/tcc-deviations.md` §17.
+
 To run the CA-engine PoC directly (bare-metal, unrelated to Docker): `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 
 To run the real end-to-end CSI validation against the May 2024 event (bare-metal, expect ~30 minutes):
 `cd backend && .venv/bin/python -m examples.validate_may2024` (requires the raw DEM/land-cover/hydrograph
 files from steps 3/4/9 plus `.venv/bin/python -m scripts.download_flood_extent` to have been run first).
+Optional `--outlet-drop-m FLOAT`/`--outflow-fraction FLOAT`/`--results-json PATH`/`--save-masks PATH`/
+`--depth-png PATH` flags (added for the outlet-margin and `outflow_fraction` sweeps above) override the
+outlet's drainage margin and/or the base interior-redistribution rate for one run and persist its scored
+metrics/masks/depth visualization for later reuse — all five default to today's exact unmodified
+behavior when omitted. `examples/shift_search_noise_floor.py --npz PATH` and
+`examples/plot_confusion_map.py --npz PATH --out PATH.png` (both new) consume a `--save-masks` `.npz`
+for the registration-shift noise-floor check and the terrain/depth/confusion visualization respectively.
 
 To run the full containerized stack: `docker compose up --build` from the repo root, then open `http://localhost:5173`.
 
@@ -605,7 +748,7 @@ have been run locally.
 
 ## Engine design notes (steps 1-2)
 
-`step(Z, H, N, outflow_fraction=0.5)` in `engine.py`: water surface elevation is `Z + H`; each cell releases at most `outflow_fraction` of its current depth per step (this cap is what keeps the explicit scheme stable and guarantees `H` never goes negative — not part of the TCC's documented equation, it's an engineering choice), split among its downhill Moore neighbors weighted by `sqrt(slope) / n` — slope is `elevation drop / distance` (diagonal neighbors count less than orthogonal ones per the TCC's note on geometric distortion), and `n` is the receiving neighbor's Manning roughness from `N` (step 2 — see "Current status" above for the full design rationale). Grid boundaries are treated as infinitely high walls (via padding with `+inf`/`0`), so the domain is a closed system — no water ever leaves the grid, which is what makes the conservation check exact rather than approximate.
+`step(Z, H, N, outflow_fraction=0.085)` in `engine.py`: water surface elevation is `Z + H`; each cell releases at most `outflow_fraction` of its current depth per step (this cap is what keeps the explicit scheme stable and guarantees `H` never goes negative — not part of the TCC's documented equation, it's an engineering choice), split among its downhill Moore neighbors weighted by `sqrt(slope) / n` — slope is `elevation drop / distance` (diagonal neighbors count less than orthogonal ones per the TCC's note on geometric distortion), and `n` is the receiving neighbor's Manning roughness from `N` (step 2 — see "Current status" above for the full design rationale). Grid boundaries are treated as infinitely high walls (via padding with `+inf`/`0`), so the domain is a closed system — no water ever leaves the grid, which is what makes the conservation check exact rather than approximate.
 
 **Fixed (post-step-1): checkerboard/speckle artifact.** Releasing the full `outflow_fraction` in one synchronous (Jacobi-style) pass caused neighboring cells to overshoot past each other step to step — the same family of instability as violating a CFL condition in explicit diffusion schemes — producing a visible speckled texture instead of a smooth flood front. Confirmed via a flat-water-everywhere test (the artifact appeared even with zero initial asymmetry) and a fraction sweep (artifact magnitude scaled linearly with `outflow_fraction`), ruling out a seeding or logic bug in favor of a step-size stability issue. Fix: `step` now internally decomposes the requested `outflow_fraction` into several smaller synchronous sub-updates that compound to the same total release (`_MAX_STABLE_SUBSTEP_FRACTION = 0.01` in `engine.py`), keeping the external `step(Z, H, outflow_fraction)` signature and per-call physical meaning unchanged. Verified: same flooded extent as before (~1380 cells), exact mass conservation, non-negative depth, and a visually smooth crescent at every snapshot; a small residual grain (~1.4% relative to local depth) remains and is inherent Moore-neighborhood lattice anisotropy, not further reducible via this parameter.
 
@@ -631,9 +774,12 @@ First version (deliberately simpler than the TCC's full documented model): redis
 10. **CSI validation against real events** *(done)* — real SGB/CPRM flood-extent ground truth for Lajeado
     (a public ArcGIS REST MapServer, indexed by river stage) ingested and rasterized onto the engine's
     grid; CSI/Hit Rate/False Alarm Rate implemented in `validation/metrics.py`; a real gauge-driven run
-    through the actual May 2024 peak scored **CSI 0.133** against it. RMSE (depth vs. HWM/SWOT) is
-    deliberately deferred - see "Step 10 done" above and `docs/tcc-deviations.md` sections 12-13 for the
-    full design and both decisions.
+    through the actual May 2024 peak scored **CSI 0.133** against it (later follow-up investigation found
+    this under-predicted due to a reference-data gap and an uncalibrated interior parameter — see the
+    "May 2024 CSI validation" entry in "Current status" above for the corrected **CSI 0.8997** and
+    `docs/tcc-deviations.md` §16 for the full investigation). RMSE (depth vs. HWM/SWOT) is deliberately
+    deferred - see "Step 10 done" above and `docs/tcc-deviations.md` sections 12-13 for the full design
+    and both decisions.
 11. **Performance benchmarking** *(current step)* — vectorized NumPy vs. loop-based comparison, exploratory CuPy/GPU, run against the real event replay from steps 9–10.
 
 Update the "Current status" section above as steps complete — this file is meant to be read at the start of future sessions instead of re-deriving the plan from scratch.

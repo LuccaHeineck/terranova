@@ -22,7 +22,7 @@ export function ConfigPanel({ status, onStart }: ConfigPanelProps) {
   const [mode, setMode] = useState<'seeded_pool' | 'gauge_driven'>('seeded_pool')
   const [steps, setSteps] = useState(200)
   const [frameInterval, setFrameInterval] = useState(DEFAULT_FRAME_INTERVAL.seeded_pool)
-  const [outflowFraction, setOutflowFraction] = useState(0.5)
+  const [outflowFraction, setOutflowFraction] = useState(0.085)
 
   const busy = status === 'starting' || status === 'streaming'
 
