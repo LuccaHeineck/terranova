@@ -11,5 +11,7 @@ data/raw/*
 data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+data/sweep_outputs/
 
 .claude/scheduled_tasks.lock
+swot_raster_100m_20240506.nc

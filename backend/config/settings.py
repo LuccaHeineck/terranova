@@ -157,6 +157,20 @@ DEM_VALIDATION_PROCESSED_PATH = PROCESSED_DIR / "lajeado_estrela_z_90m.tif"
 LANDCOVER_VALIDATION_PROCESSED_PATH = PROCESSED_DIR / "lajeado_estrela_n_90m.tif"
 FLOOD_EXTENT_VALIDATION_PROCESSED_PATH = PROCESSED_DIR / "lajeado_flood_extent_90m.tif"
 
+# Real ANA gauge 86879300 ("ESTRELA", Rio Taquari), lat -29.4717/lon -51.965 (via ANA's
+# public HidroInventario API), reprojected into EPSG:31982 and inverted through the 90m
+# validation grid's affine transform (shape 61x64) -> row 20, col 26 (Z=16.0m, 2 cells
+# from a 13m channel band - a real river-gauge location, not an arbitrary cell). NOT
+# argmin(Z) - this is a one-time geolocation result, valid only for the grid
+# VALIDATION_RESOLUTION_METERS=90.0 above produces; re-derive if that resolution changes.
+# The vertical datum between this DEM's Z and the gauge's real stage readings is
+# unresolved (ANA's own published station Altitude, -0.6m, is implausible against local
+# channel-bed elevations, ~13-17m off) - only relative WSE dynamics at this cell (rise
+# rate, still-rising vs. plateaued) are trustworthy, not absolute comparisons against the
+# real 33.66m peak stage.
+VALIDATION_GAUGE_ROW = 20
+VALIDATION_GAUGE_COL = 26
+
 
 def get_opentopography_api_key() -> str:
     """Read the OpenTopography API key from the environment.

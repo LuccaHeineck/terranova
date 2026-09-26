@@ -17,7 +17,10 @@ All three metrics are standard confusion-matrix counts over the two masks:
 import numpy as np
 
 
-def _confusion_counts(simulated: np.ndarray, observed: np.ndarray) -> tuple[int, int, int]:
+def confusion_counts(simulated: np.ndarray, observed: np.ndarray) -> tuple[int, int, int]:
+    """(TP, FP, FN) counts - public so callers outside this module (e.g. a
+    confusion-map visualization) can build a per-cell classification without
+    duplicating this logic."""
     tp = int(np.logical_and(simulated, observed).sum())
     fp = int(np.logical_and(simulated, ~observed).sum())
     fn = int(np.logical_and(~simulated, observed).sum())
@@ -36,7 +39,7 @@ def csi(simulated: np.ndarray, observed: np.ndarray) -> float:
     return a misleading number (same fail-fast style as
     `ingestion.hydrograph.discharge_to_inflow`'s empty-mask check).
     """
-    tp, fp, fn = _confusion_counts(simulated, observed)
+    tp, fp, fn = confusion_counts(simulated, observed)
     denominator = tp + fp + fn
     if denominator == 0:
         raise ValueError("CSI is undefined: no flooded cells in either mask")
@@ -49,7 +52,7 @@ def hit_rate(simulated: np.ndarray, observed: np.ndarray) -> float:
     Fraction of the real observed flooding the simulation actually caught.
     Raises if there are no observed flooded cells (undefined).
     """
-    tp, _, fn = _confusion_counts(simulated, observed)
+    tp, _, fn = confusion_counts(simulated, observed)
     denominator = tp + fn
     if denominator == 0:
         raise ValueError("hit rate is undefined: no observed flooded cells")
@@ -62,7 +65,7 @@ def false_alarm_rate(simulated: np.ndarray, observed: np.ndarray) -> float:
     Fraction of the simulation's flooded prediction that wasn't real.
     Raises if there are no simulated flooded cells (undefined).
     """
-    tp, fp, _ = _confusion_counts(simulated, observed)
+    tp, fp, _ = confusion_counts(simulated, observed)
     denominator = tp + fp
     if denominator == 0:
         raise ValueError("false alarm rate is undefined: no simulated flooded cells")
