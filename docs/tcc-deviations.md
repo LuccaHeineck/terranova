@@ -464,7 +464,8 @@ regardless of run order.
   work, not blocking step 10's CSI deliverable.
 - **GPU/CuPy performance benchmarking** — TCC1's stack rationale names CuPy-compatibility as a design
   goal; the NumPy code has been kept vectorized/CuPy-compatible throughout, but nothing has actually
-  been run on a GPU yet. Roadmap step 11 (see section 13 above for the CPU-side investigation attempted
+  been run on a GPU yet. *(Since done, first pass: see §18 - CuPy is kernel-launch-bound on this
+  project's grids, 5x slower at 90m and ~2x faster at 30m; a fused-kernel substep is the open follow-up.)* Roadmap step 11 (see section 13 above for the CPU-side investigation attempted
   first, which found the real bottleneck is the substep decomposition, not something GPU parallelism
   alone would fix, given it's dominated by the same fixed-count sequential dependency regardless of
   where each pass executes).
@@ -758,6 +759,82 @@ replacing the temporal model with the faster one.
 
 **Status**: design-stage only. Not implemented, not yet assigned to a specific roadmap step — noted here
 as planned future work so it isn't lost between sessions.
+
+---
+
+## 18. GPU/CuPy portability — first measurement, and the runtime side of the `0.085` default (step 11, Q10)
+
+**TCC1:** the stack rationale names CuPy-compatibility as a design goal, and TCC1's own Quadro 7 schedules
+GPU work for Q10 (see §14). Until this pass nothing had run on a GPU. This section answers one question:
+does swapping NumPy for CuPy meaningfully speed up the engine? It first re-baselines under the `0.085`
+default adopted in §16.4, so a runtime change from that calibration isn't misattributed to the GPU.
+
+**Setup.** Real May 2024 gauge-driven scenario (real terrain, roughness, hydrograph and outlet), run to
+the real observed peak, measured with a new parameterized runner, `examples/benchmark_backends.py`
+(`--resolution 30|90`, `--outflow-fraction`, `--backend numpy|cupy`, `--max-steps`, `--assert-every`).
+Hardware: i7-13620H (NumPy), RTX 4050 Laptop GPU, 6 GB (CuPy 14.2 / CUDA 13, float64). Timings were
+taken uncontended and repeated (repeats agree within ~5%). Concurrent GPU/CPU jobs on this hybrid-core
+laptop were found to slow a background NumPy run ~3x, so no two benchmarks were run at the same time.
+
+**Phase 1 — the `0.085` default alone (NumPy, 90m, to the peak):**
+
+| | `0.5` (previous default) | `0.085` (live default) |
+|---|---|---|
+| macro steps to the peak | 82,936 | 134,639 (1.62x) |
+| substeps per macro step | 50 (every step) | 9 (every step) |
+| per-step wall-clock (p50) | 16.6 ms | 3.3 ms (~5x cheaper) |
+| **wall-clock to the peak** | **23.3 min** | **7.6 min (3.1x faster)** |
+| naive CSI (reproduces §16.3's table) | 0.133 | 0.395 |
+
+- The step count still reproduces the documented baseline (82,936 vs. step 10's 82,933; CSI 0.133). The
+  naive confusion counts at `0.085` reproduce §16.4 to one cell (TP 789, FP 1,166 vs. 1,167, FN 42). That
+  one-cell difference is consistent with the ulp-level sensitivity described below.
+- **Why 3.1x rather than the 5.5x fewer substeps suggests**: this is §16.3's own mechanism seen from the
+  runtime side. Slower redistribution lets water pool and spread laterally instead of rushing down the
+  channel to the outlet, so the grid holds more water (`H.sum()` at the peak is 8.5x higher). Deeper water
+  flows faster, and CFL `dt` (`compute_stable_dt`, independent of `outflow_fraction`) shrinks. That costs
+  1.62x more macro steps, but each is ~5x cheaper.
+- **This is not an over-flooding artifact.** The naive False Positive count (1,167) is almost entirely
+  the Estrela reference-data gap (§16.2). After the Estrela-gap correction the real over-prediction is a
+  modest **46 cells**, and the validated CSI is **0.8997** (§16.4). So the extra retained water is the
+  model reaching floodplain the step-10 default never reached (genuine under-spreading fixed), plus a
+  reference gap that has been resolved. It is not the model inventing flood extent.
+- A real-terrain visual check (§13's rule) of H snapshots at steps 20k-80k and at the peak agrees with
+  §16.3's: smooth, coherent flood fields, no speckle/mottling. Among fully-wet interior cells, the
+  fraction that is an isolated local depth extremum is 18.7% at `0.085` vs. 28.5% at `0.5`.
+- At 30m, only a 2,000-step sample was measured: 143 -> 31 ms/step (4.6x per step), against the
+  45-49 h full 14-day 30m runtime at `0.5` recorded in `docs/project-plan.md`.
+
+**Phase 2 — CuPy.** `simulation/engine.py` is now array-backend-agnostic: `_array_module(a)` returns CuPy
+for CuPy arrays and NumPy otherwise, and CuPy is imported only when a CuPy array is actually passed in,
+so it stays an optional dependency (installed ad hoc, not in `requirements.txt`). The NumPy path was
+verified bit-identical (`H` and `dt`) to the previous engine over 2,000 real steps. It is not wired into
+the API.
+
+| per-step p50, `outflow_fraction=0.085` | NumPy | CuPy |
+|---|---|---|
+| 90m (3,904 cells) | 3.2 ms | 16.5 ms (**5x slower**) |
+| 30m (35,136 cells) | 31 ms | 15.9 ms (**~2x faster**) |
+
+- **Launch-bound, not compute-bound**: CuPy's ~16 ms/step is flat across a 9x change in grid size. One
+  macro step is ~9 passes of ~80 small elementwise kernels. Per-step host syncs (`dt`'s `float()`,
+  validation `any()`s, mass-balance sums) cost only ~4% (measured with `--assert-every 1000`). GPU memory
+  use is under 8 MB. Every NumPy op used had a direct CuPy equivalent, so no op needed a workaround.
+- **Numerical parity, and a finding about the engine itself**: from an identical input state a CuPy step
+  is bit-identical to NumPy's. Free-running trajectories nonetheless separate by ~0.2 m within ~50 steps,
+  starting from a single-ulp difference in `dt`. **The same divergence appears NumPy-vs-NumPy when `H` is
+  perturbed by one ulp** (8.8 mm after one step, ~0.2 m within 50), so this is the engine amplifying
+  ulp-level noise, not a GPU bug. The likely mechanism: weights are `sqrt(slope)/n` (infinite derivative
+  at zero slope), normalized, with a release amount that doesn't depend on slope magnitude. On near-flat
+  water, ulp-scale drops redirect a cell's whole release. Cross-backend (or cross-machine) parity
+  therefore has to be judged on outcomes (wet mask, CSI, step count), not `allclose` on `H`. Wet masks
+  matched exactly over 2,000 steps.
+
+**Conclusion.** Phase 1's calibration is the real runtime win on this project's grid sizes (3.1x at 90m).
+A naive NumPy -> CuPy array swap adds nothing at 90m and ~2x at 30m, which does not justify a full
+migration or live-API integration as-is. The GPU follow-up worth trying is a fused single-kernel substep
+(one CuPy `ElementwiseKernel`/`RawKernel` per pass), which targets the launch overhead that dominates
+here. It is relevant only at 30m or finer.
 
 ---
 

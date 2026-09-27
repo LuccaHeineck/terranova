@@ -22,6 +22,7 @@ export function ConfigPanel({ status, onStart }: ConfigPanelProps) {
   const [mode, setMode] = useState<'seeded_pool' | 'gauge_driven'>('seeded_pool')
   const [steps, setSteps] = useState(200)
   const [frameInterval, setFrameInterval] = useState(DEFAULT_FRAME_INTERVAL.seeded_pool)
+  // Mirrors the backend's DEFAULT_OUTFLOW_FRACTION (simulation/engine.py) - keep in sync by hand.
   const [outflowFraction, setOutflowFraction] = useState(0.085)
 
   const busy = status === 'starting' || status === 'streaming'
@@ -103,7 +104,7 @@ export function ConfigPanel({ status, onStart }: ConfigPanelProps) {
           type="number"
           min={0.01}
           max={1}
-          step={0.01}
+          step={0.005}
           value={outflowFraction}
           disabled={busy}
           onChange={(e) => setOutflowFraction(Number(e.target.value))}

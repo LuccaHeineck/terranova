@@ -70,6 +70,13 @@ _FLOODED_DEPTH_THRESHOLD_M = 0.01
 
 _PROGRESS_EVERY_N_STEPS = 5_000
 
+# Deliberately NOT simulation.engine.DEFAULT_OUTFLOW_FRACTION (the live default,
+# 0.085): an unflagged run of this script keeps reproducing the original step-10
+# baseline (CSI 0.133) for comparison rather than silently drifting to a
+# different number - see docs/tcc-deviations.md section 16.4. Pass
+# --outflow-fraction to score any other value, including the live default.
+_STEP10_BASELINE_OUTFLOW_FRACTION = 0.5
+
 # How many equal-width windows to split the last 20% of elapsed time into for
 # the gauge-cell WSE rise-rate trend (see _rise_rate_windows below) - matches
 # the window count/placement a prior (undocumented) diagnostic used, after an
@@ -208,7 +215,7 @@ def _require_raw_file(path, download_command: str) -> None:
 def _run_to_peak(
     peak_elapsed_seconds: float,
     outlet_drop_m: float | None = None,
-    base_outflow_fraction: float = 0.5,
+    base_outflow_fraction: float = _STEP10_BASELINE_OUTFLOW_FRACTION,
     seed_baseflow_depth: bool = False,
     results_json: Path | None = None,
     save_masks: Path | None = None,
@@ -224,8 +231,8 @@ def _run_to_peak(
     across every sweep variant.
 
     `base_outflow_fraction` overrides the base value passed into
-    `outflow_fraction_for_dt` each step (default 0.5, matching the previously
-    hardcoded literal) - the interior-redistribution-rate lever swept in the
+    `outflow_fraction_for_dt` each step (default `_STEP10_BASELINE_OUTFLOW_FRACTION`,
+    0.5 - the step-10 baseline, not the live default) - the interior-redistribution-rate lever swept in the
     outflow_fraction sweep (see docs/project-plan.md). A second, independent
     isolated lever from `outlet_drop_m` above.
 
@@ -448,7 +455,8 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Override the base outflow_fraction passed to outflow_fraction_for_dt each "
-            "step (default 0.5) - exploratory calibration for the interior "
+            "step (default 0.5, the step-10 baseline - not the live 0.085 default) - "
+            "exploratory calibration for the interior "
             "redistribution-rate sweep, see docs/project-plan.md. Omit to use the "
             "existing default unchanged."
         ),
@@ -504,7 +512,7 @@ def main() -> None:
     _run_to_peak(
         peak_elapsed_seconds,
         outlet_drop_m=args.outlet_drop_m,
-        base_outflow_fraction=args.outflow_fraction if args.outflow_fraction is not None else 0.5,
+        base_outflow_fraction=args.outflow_fraction if args.outflow_fraction is not None else _STEP10_BASELINE_OUTFLOW_FRACTION,
         seed_baseflow_depth=args.seed_baseflow_depth,
         results_json=args.results_json,
         save_masks=args.save_masks,

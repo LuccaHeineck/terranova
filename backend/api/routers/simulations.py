@@ -34,7 +34,13 @@ from api.state import (
 )
 from config.settings import TARGET_RESOLUTION_METERS
 from ingestion.hydrograph import Hydrograph, discharge_to_inflow
-from simulation.engine import compute_stable_dt, outflow_fraction_for_dt, seed_pool_at_lowest_point, step
+from simulation.engine import (
+    DEFAULT_OUTFLOW_FRACTION,
+    compute_stable_dt,
+    outflow_fraction_for_dt,
+    seed_pool_at_lowest_point,
+    step,
+)
 
 router = APIRouter()
 
@@ -45,7 +51,7 @@ class SimulationParams(BaseModel):
     mode: Literal["seeded_pool", "gauge_driven"] = "seeded_pool"
     steps: int | None = Field(default=None, gt=0)
     frame_interval: int = Field(gt=0)
-    outflow_fraction: float = Field(default=0.085, gt=0, le=1)
+    outflow_fraction: float = Field(default=DEFAULT_OUTFLOW_FRACTION, gt=0, le=1)
 
     @model_validator(mode="after")
     def _validate_steps_matches_mode(self) -> "SimulationParams":

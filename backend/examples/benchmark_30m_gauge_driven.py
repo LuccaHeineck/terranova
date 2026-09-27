@@ -36,7 +36,7 @@ from ingestion.hydrograph import (
     load_raw_stage_series,
 )
 from ingestion.landcover import build_roughness_matrix
-from simulation.engine import compute_stable_dt, outflow_fraction_for_dt, step
+from simulation.engine import DEFAULT_OUTFLOW_FRACTION, compute_stable_dt, outflow_fraction_for_dt, step
 from validation.metrics import csi, false_alarm_rate, hit_rate
 
 _FLOODED_DEPTH_THRESHOLD_M = 0.01
@@ -80,7 +80,7 @@ def _run_to_peak(peak_elapsed_seconds: float) -> None:
             Z,
             H,
             N,
-            outflow_fraction=outflow_fraction_for_dt(0.085, dt, dt_cfl),
+            outflow_fraction=outflow_fraction_for_dt(DEFAULT_OUTFLOW_FRACTION, dt, dt_cfl),
             inflow=inflow,
             boundary_elevation=boundary_elevation,
             boundary_roughness=boundary_roughness,

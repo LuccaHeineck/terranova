@@ -15,12 +15,22 @@ of a wall.
 
 This module has no I/O and no geodata dependency on purpose - it operates
 on plain NumPy arrays so it can be validated on small synthetic grids
-before any real elevation/roughness data is involved.
+before any real elevation/roughness data is involved. It is also
+array-backend-agnostic: pass CuPy arrays instead and every function runs on
+the GPU (see `_array_module`), with no hard CuPy dependency here.
 """
 
 import math
 
 import numpy as np
+
+# Default per-macro-step release cap for `step()` - the single source of truth for
+# the live default (the API and example scripts import it rather than repeating
+# the literal; the frontend's ConfigPanel mirrors it by hand). Calibrated against
+# the real May 2024 event, replacing the never-tuned 0.5: see
+# docs/tcc-deviations.md section 16.3 for the calibration plateau and section 18
+# for its runtime effect.
+DEFAULT_OUTFLOW_FRACTION = 0.085
 
 MOORE_OFFSETS = [
     (-1, -1), (-1, 0), (-1, 1),
@@ -62,20 +72,32 @@ MOORE_OFFSETS = [
 _MAX_STABLE_SUBSTEP_FRACTION = 0.01
 
 
+def _array_module(a):
+    """NumPy for NumPy arrays, CuPy for CuPy arrays - so every function below can
+    run unchanged on either backend. CuPy is only imported when a CuPy array is
+    actually passed in, keeping it an optional dependency."""
+    if type(a).__module__.startswith("cupy"):
+        import cupy
+
+        return cupy
+    return np
+
+
 def _single_update(Zp: np.ndarray, Np: np.ndarray, H: np.ndarray, outflow_fraction: float) -> np.ndarray:
     """One synchronous Moore-neighborhood redistribution pass."""
+    xp = _array_module(H)
     rows, cols = H.shape
-    Hp = np.pad(H, 1, mode="constant", constant_values=0.0)
+    Hp = xp.pad(H, 1, mode="constant", constant_values=0.0)
     wse = Zp + Hp
     center = wse[1:-1, 1:-1]
 
     weights = []
-    total_weight = np.zeros((rows, cols))
+    total_weight = xp.zeros((rows, cols))
     for dr, dc in MOORE_OFFSETS:
         neighbor = wse[1 + dr: 1 + dr + rows, 1 + dc: 1 + dc + cols]
         neighbor_n = Np[1 + dr: 1 + dr + rows, 1 + dc: 1 + dc + cols]
         distance = math.hypot(dr, dc)
-        drop = np.maximum(center - neighbor, 0.0)
+        drop = xp.maximum(center - neighbor, 0.0)
         slope = drop / distance
         # Manning's Q_i = (1/n_i) * h_i^(5/3) * sqrt(S_i). h_i (the source
         # cell's own depth) is the same in all 8 directions, so it's a
@@ -85,15 +107,15 @@ def _single_update(Zp: np.ndarray, Np: np.ndarray, H: np.ndarray, outflow_fracti
         # water is entering), not the source cell's - the TCC's summary
         # doesn't pin this down explicitly, so this is a documented modeling
         # choice, not a literal transcription.
-        weight = np.sqrt(slope) / neighbor_n
+        weight = xp.sqrt(slope) / neighbor_n
         weights.append(weight)
         total_weight += weight
 
     has_outflow = total_weight > 0
-    safe_total_weight = np.where(has_outflow, total_weight, 1.0)
-    total_outflow = np.where(has_outflow, outflow_fraction * H, 0.0)
+    safe_total_weight = xp.where(has_outflow, total_weight, 1.0)
+    total_outflow = xp.where(has_outflow, outflow_fraction * H, 0.0)
 
-    inflow = np.zeros((rows + 2, cols + 2))
+    inflow = xp.zeros((rows + 2, cols + 2))
     for (dr, dc), weight in zip(MOORE_OFFSETS, weights):
         outflow = total_outflow * (weight / safe_total_weight)
         inflow[1 + dr: 1 + dr + rows, 1 + dc: 1 + dc + cols] += outflow
@@ -105,7 +127,7 @@ def step(
     Z: np.ndarray,
     H: np.ndarray,
     N: np.ndarray,
-    outflow_fraction: float = 0.085,
+    outflow_fraction: float = DEFAULT_OUTFLOW_FRACTION,
     inflow: np.ndarray | None = None,
     boundary_elevation: np.ndarray | None = None,
     boundary_roughness: np.ndarray | None = None,
@@ -161,14 +183,15 @@ def step(
     `ingestion/hydrograph.py`'s boundary-outlet builder for how the real ROI's
     override arrays are actually constructed from the DEM.
     """
+    xp = _array_module(H)
     if not (0 < outflow_fraction <= 1):
         raise ValueError("outflow_fraction must be in (0, 1]")
-    if np.any(N <= 0):
+    if xp.any(N <= 0):
         raise ValueError("N (Manning roughness) must be strictly positive everywhere")
     if inflow is not None:
         if inflow.shape != H.shape:
             raise ValueError("inflow must have the same shape as H")
-        if np.any(inflow < 0):
+        if xp.any(inflow < 0):
             raise ValueError("inflow must be non-negative everywhere")
     padded_shape = (H.shape[0] + 2, H.shape[1] + 2)
     if boundary_elevation is not None and boundary_elevation.shape != padded_shape:
@@ -176,7 +199,7 @@ def step(
     if boundary_roughness is not None:
         if boundary_roughness.shape != padded_shape:
             raise ValueError(f"boundary_roughness must have shape {padded_shape} (H's shape padded by 1)")
-        if np.any(boundary_roughness <= 0):
+        if xp.any(boundary_roughness <= 0):
             raise ValueError("boundary_roughness must be strictly positive everywhere")
 
     n_substeps = math.ceil(outflow_fraction / _MAX_STABLE_SUBSTEP_FRACTION)
@@ -188,7 +211,7 @@ def step(
     if boundary_elevation is not None:
         Zp = boundary_elevation
     else:
-        Zp = np.pad(Z, 1, mode="constant", constant_values=np.inf)
+        Zp = xp.pad(Z, 1, mode="constant", constant_values=xp.inf)
     if boundary_roughness is not None:
         Np = boundary_roughness
     else:
@@ -196,7 +219,7 @@ def step(
         # weights are always multiplied by drop=0 since no real cell exceeds
         # the +inf-padded wall - but must be positive to avoid 0 * inf = nan
         # corrupting the array.
-        Np = np.pad(N, 1, mode="constant", constant_values=1.0)
+        Np = xp.pad(N, 1, mode="constant", constant_values=1.0)
     for _ in range(n_substeps):
         H = _single_update(Zp, Np, H, substep_fraction)
     if inflow is not None:
@@ -258,31 +281,34 @@ def compute_stable_dt(
     per call - see `docs/project-plan.md`'s step 8 notes for the known gap this
     leaves for later steps to reconcile.
     """
+    xp = _array_module(H)
     if dx <= 0:
         raise ValueError("dx must be positive")
     if not (0 < courant_number <= 1):
         raise ValueError("courant_number must be in (0, 1]")
-    if np.any(N <= 0):
+    if xp.any(N <= 0):
         raise ValueError("N (Manning roughness) must be strictly positive everywhere")
 
     rows, cols = H.shape
-    Zp = np.pad(Z, 1, mode="constant", constant_values=np.inf)
-    Hp = np.pad(H, 1, mode="constant", constant_values=0.0)
+    Zp = xp.pad(Z, 1, mode="constant", constant_values=xp.inf)
+    Hp = xp.pad(H, 1, mode="constant", constant_values=0.0)
     wse = Zp + Hp
     center = wse[1:-1, 1:-1]
 
-    max_slope = np.zeros((rows, cols))
+    max_slope = xp.zeros((rows, cols))
     for dr, dc in MOORE_OFFSETS:
         neighbor = wse[1 + dr: 1 + dr + rows, 1 + dc: 1 + dc + cols]
         distance = math.hypot(dr, dc)
-        drop = np.maximum(center - neighbor, 0.0)
+        drop = xp.maximum(center - neighbor, 0.0)
         slope = drop / (distance * dx)
-        max_slope = np.maximum(max_slope, slope)
+        max_slope = xp.maximum(max_slope, slope)
 
     # H should never be meaningfully negative (step()'s own tested invariant keeps it
     # within -1e-9 of zero), but a fractional exponent on a negative float is nan.
-    velocity = (1.0 / N) * np.power(np.maximum(H, 0.0), 2.0 / 3.0) * np.sqrt(max_slope)
-    v_max = velocity.max()
+    velocity = (1.0 / N) * xp.power(xp.maximum(H, 0.0), 2.0 / 3.0) * xp.sqrt(max_slope)
+    # float(): a Python scalar on either backend (on CuPy this is the one
+    # unavoidable device->host sync per macro step - dt drives the host loop).
+    v_max = float(velocity.max())
 
     if v_max <= 0:
         return _NO_FLOW_FALLBACK_DT_SECONDS

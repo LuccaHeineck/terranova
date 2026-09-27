@@ -640,7 +640,7 @@ mathematically exact, but negligible real-world effect) and relaxing `_MAX_STABL
 `0.02` (a real 1.85x speedup on synthetic benchmarks, reverted after producing a visible
 mottled/branching artifact on real gauge-driven terrain that neither synthetic test caught). **GPU/CuPy
 remains the primary untested lever, scheduled for Q10 (October) per TCC1's own Quadro 7 — not attempted
-in this session.** Separately, a real file-naming collision was found and fixed this session:
+in this session.** (Since measured - see the Q10 entry below and `docs/tcc-deviations.md` §18.) Separately, a real file-naming collision was found and fixed this session:
 `benchmark_30m_gauge_driven.py` was silently overwriting the 90m validation mask under the same
 filename; fixed via a new, distinct `settings.FLOOD_EXTENT_PROCESSED_PATH` constant — verified no
 collision regardless of run order.
@@ -652,6 +652,29 @@ timing, which a non-temporal model can't) and add a second, separate, explicitly
 fast classification mode (Torres-style elevation-ordered classification) alongside it, documenting the
 speed/accuracy trade-off rather than replacing the temporal model. Design-stage only — not implemented.
 See `docs/tcc-deviations.md` §17.
+
+**Step 11, Q10 — GPU portability research, first pass.** Answers "does swapping NumPy for CuPy help?",
+after first re-baselining under the new `0.085` default so the two effects aren't conflated. Measured on
+the real May 2024 gauge-driven scenario to the observed peak, via a new parameterized runner,
+`backend/examples/benchmark_backends.py` (`--resolution 30|90`, `--outflow-fraction`, `--backend
+numpy|cupy`, `--max-steps`, `--assert-every`), which reproduces every number here:
+- **The `0.085` default alone is a 3.1x runtime win at 90m** (NumPy, 23.3 -> 7.6 min to the peak). Each
+  macro step is ~5x cheaper (9 substeps instead of 50), partly offset by 1.62x more macro steps: slower
+  redistribution lets water pool and spread (the §16.3 mechanism), velocities rise, CFL `dt` shrinks. At
+  30m, a 2,000-step sample drops 143 -> 31 ms/step. The accuracy side is §16's, reproduced here (naive CSI
+  0.395), not re-derived.
+- **CuPy adds nothing at 90m and ~2x at 30m.** The engine is now array-backend-agnostic
+  (`simulation/engine.py`'s `_array_module`: pass CuPy arrays and every function runs on the GPU; CuPy is
+  never imported otherwise; the NumPy path is bit-identical to the previous engine). On an RTX 4050 Laptop
+  GPU CuPy costs ~16 ms/step regardless of grid size - kernel-launch-bound, not compute-bound - so it is
+  5x *slower* than NumPy at 90m and ~2x faster at 30m. Not wired into the API.
+- **Single live default**: the `0.085` literals from the adoption commit above are now one constant,
+  `simulation.engine.DEFAULT_OUTFLOW_FRACTION`, imported by the API and the 30m benchmark;
+  `validate_may2024.py` keeps its documented `0.5` baseline as a named `_STEP10_BASELINE_OUTFLOW_FRACTION`.
+  The frontend mirrors the value by hand, and its input `step` was changed to `0.005` (at `0.01` the
+  browser's own step validation rejects `0.085` on submit).
+- Recommendation: not worth a full migration as-is; the next GPU experiment is a fused single-kernel
+  substep that removes the launch overhead. Full write-up: `docs/tcc-deviations.md` §18.
 
 To run the CA-engine PoC directly (bare-metal, unrelated to Docker): `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 

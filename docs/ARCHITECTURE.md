@@ -61,7 +61,7 @@ terranova/
 ### `backend/simulation/` — the domain layer
 
 What belongs here: the CA transition rule itself — pure functions over NumPy arrays (`Z`, `H`, `N` for
-roughness). Currently just `engine.py`, exposing `step(Z, H, N, outflow_fraction=0.085)` and
+roughness). Currently just `engine.py`, exposing `step(Z, H, N, outflow_fraction=DEFAULT_OUTFLOW_FRACTION)` (0.085) and
 `compute_stable_dt(Z, H, N, dx, courant_number=1.0)` (step 8 — derives a real elapsed timestep from
 Manning flow velocities under a CFL condition; `dx` is passed in by the caller, never imported from
 `config/`, keeping this module dependency-free).
@@ -199,7 +199,8 @@ file. No code.
 
 ## 5. Explanation of important files
 
-- **`backend/simulation/engine.py`** — the whole CA engine today: `step(Z, H, N, outflow_fraction=0.085)`.
+- **`backend/simulation/engine.py`** — the whole CA engine today: `step(Z, H, N, outflow_fraction=DEFAULT_OUTFLOW_FRACTION)`
+  (0.085, calibrated in `docs/tcc-deviations.md` §16.3; runtime/GPU measurements in §18).
   Pads `Z`/`H`/`N` so the grid boundary is a closed wall, computes water-surface elevation `WSE = Z + H`,
   distributes each cell's outflow to downhill Moore neighbors weighted by `sqrt(slope) / n` (slope =
   drop/distance, diagonal neighbors get a longer distance per the TCC's note on geometric distortion;
