@@ -44,6 +44,11 @@ export interface SimulationFrame {
   compute_seconds?: number
 }
 
+export interface GridShape {
+  rows: number
+  cols: number
+}
+
 export interface SimulationDone {
   done: true
 }

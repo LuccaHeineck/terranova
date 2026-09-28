@@ -908,6 +908,109 @@ change.
   plus the `docker-compose.yml` `FRONTEND_PORT` change on its own. The suite, build and lint passed at
   each commit.
 
+**Timeline scrubber for temporal runs.** Frontend only; no backend or API change. Any past frame of a
+temporal run can now be shown again without re-running.
+- **Compact frames.** Each wire frame's `number[][]` depth is converted once, on arrival
+  (`rendering/depthGrid.ts`), into a `DepthGrid`: a row-major `Float32Array` plus rows/cols. The
+  rasterizer, the flooded-cell count and the agreement counts loop over the flat array, with the same
+  0.01 m cutoff. Float32 precision is far below the cutoff and the band edges.
+- **Bounded buffer** (`rendering/frameBuffer.ts`, pure functions). The temporal `ResultLayer` holds a
+  `FrameBuffer`, so the §21 stale-state rules apply to it unchanged: a new run starts a new buffer, a grid
+  change clears it, a seeded-pool run clears the fast layer, and Stop keeps it scrubbable.
+  - **Budget: 32 MiB**, which gives 238 frames at 30m (140.5 KB each) and 2,048 (the cap) at 90m. A 90m
+    run to the peak (~270 frames at the default interval) is never thinned.
+  - **Decimation:** every `stride`-th received frame is kept, plus always the newest one, so live is exact.
+    When the buffer is full, every other kept frame is dropped and `stride` doubles.
+
+    The buffer then always spans the whole run evenly, between capacity/2 and capacity frames, with the
+    first and latest frames always kept. A Node check over 5,000 frames never exceeded 238 frames or
+    ~32 MB. The UI says when thinning has happened ("every 8th received frame kept").
+- **Selection and playback** (`hooks/useTimeline.ts`):
+  - **Selection is a step, not an index.** Thinning shifts indices, so a paused view snaps to the nearest
+    kept frame at or before its step.
+  - **Following:** `null` means follow the newest frame. Dragging back pauses auto-follow, "Jump to live"
+    / "Jump to latest" resumes it, and dragging to the end follows again.
+  - **Play/pause** at 8 frames/s. It starts from the first frame when at the end, and once it reaches the
+    newest frame it goes back to following it.
+- **UI** (`components/Timeline.tsx`), a strip under the temporal pane:
+  - slider, Play/Pause, a Live / Paused / Replaying / Latest indicator, and buffer size and thinning;
+  - readout for the selected frame: step, t, flooded cells, volume, cumulative in/out, and the
+    mass-balance residual `volume − (in − out)` (e.g. −2.5e-10 at t = 60.9 h). Volumes are summed cell
+    depths, as the API sends them.
+  - **In Compare it spans only the temporal column.** It is titled "Timeline: temporal CA pane", and the
+    fast column reads "Fast mode: one steady frame at the peak. It does not follow the timeline."
+  - The temporal pane's overlay and label, and the log panel's comparison block (counts and the
+    "different moments" warning), use the selected frame. The block says so when it isn't the latest one.
+- **Memory, measured in the browser on real 30m gauge-driven runs** at `frame_interval=5`, via CDP after
+  a forced GC:
+  - V8 heap (`usedSize`) plus ArrayBuffer backing stores (`backingStorageSize`). The second is where
+    typed arrays live; the first alone misses them.
+  - **Production build** (`vite build` + `vite preview`), 1,000 frames: **V8 heap flat at 3.6 → 4.8 MB**.
+
+    The backing stores track the buffer exactly:
+
+    | Frames received | Backing stores |
+    |---|---|
+    | 100 | 13.8 MB |
+    | 238 (full) | 32.3 MB |
+    | 301 (first thinning) | 20.7 MB |
+    | 600 / 801 / 1,001 | 20.7 / 27.4 / 17.4 MB |
+
+    **Peak total: 36.7 MB.** It stays in that saw-tooth band however long the run gets.
+  - **Nested `number[][]` for comparison**, measured on real frames: 279.5 KB per frame on a wet
+    frame (all 183 rows non-zero) against 137.2 KB as `Float32Array`, i.e. **2.04×**. On the mostly
+    dry first frame it was only 1.11×, because V8 packs all-zero rows as small integers.
+
+    Unbounded, 1,000 frames would have been ~273 MB nested or ~137 MB as `Float32Array`, against ≤ 32 MB
+    buffered.
+  - **Dev build** (`npm run dev`), after the fix below, 1,500 frames: the backing stores behave the same,
+    at 21–37 MB. The V8 heap still grows ~53 KB per frame (13 → 79 MB). That growth is React 19's
+    dev-mode performance tracks: 684k retained measure rows at 1,500 frames, none in production. It is
+    not the buffer.
+- **Bugs found in the browser, not by `tsc`/lint:**
+  - **Dev-mode out-of-memory after ~1,200 frames at 30m.** React 19's dev performance tracks diff every
+    changed prop with `for…in`, three levels deep, and store the result in a `performance.measure` detail
+    that the browser keeps.
+    - The first design kept the grid as a plain `depth: Float32Array`. It sits two levels deep in the
+      timeline props and one level deep in the log panel's, so every render enumerated all 35,136 cells,
+      twice.
+    - Measured: after 40 frames, **8.3 million** retained rows; the largest single entry was 70,309
+      rows. At ~1,200 frames: "Failed to execute 'measure' on 'Performance': Data cannot be cloned, out
+      of memory", then React's "Should not already be working", and the UI froze (Stop and the slider
+      stopped responding).
+    - Fix: the `Float32Array` lives in a private class field (`DepthGrid.#values`), which is invisible to
+      `for…in`. The same 40-frame run then retained 3,317 rows, the largest entry 44.
+    - The old nested `number[][]` sat deeper than React's diff reaches, which is why this never showed up
+      before. Production builds were never affected.
+  - **"out -0.0" in the readout:** cumulative outflow is float noise just below zero early in a run.
+    Values that round to zero are now printed as 0.
+  - `tsc` found nothing. **`oxlint`** found one issue: a `useCallback` depending on a per-render object
+    (`react-hooks/exhaustive-deps`), fixed with `useMemo`.
+- **Verified in a real browser** (Playwright + Chromium against real `uvicorn` + Vite). Every scrubbed
+  frame was checked: the overlay's decoded pixels use only ramp colors, the wet-pixel count equals the
+  readout's flooded cells, the pane label's t equals the readout's, and the depth legend is present.
+  **0 failed checks** after the fix.
+  - **90m, live** (`frame_interval=100`):
+    - dragging back pauses, and frame 3 stayed on screen while 3 more frames arrived;
+    - "Jump to live" follows again;
+    - Play restarts at frame 1, advances at ~8 fps, holds on Pause, and resumes live at the end;
+    - after Stop, 27/27 frames scrub consistently.
+  - **90m, May 2024 replay to the peak, in Compare:**
+    - peak at step 134,639 with 1,955 cells, **1,648 / 307 / 1,192** at the latest frame;
+    - 91 of 270 frames scrubbed, all consistent, with the fast pane unchanged throughout (2,840 cells, one
+      color);
+    - at frame 101 (t = 60.9 h) the comparison read 424 / 3 / 2,416 with the "different moments" warning,
+      and returned to 1,648 / 307 / 1,192 on "Jump to latest".
+  - **30m:**
+    - scrubbing during a live, already-thinned run held its step while frames kept arriving;
+    - after Stop at 1,500 frames, 64 of 189 buffered frames scrubbed consistently;
+    - fast @ 30m kept the stopped run's buffer, and Compare scrubbed the temporal pane only (fast pane
+      13,987 cells, unchanged);
+    - grid → 90m cleared it;
+    - a seeded-pool run cleared the fast layer, and its 40/40 frames scrubbed consistently after done.
+- Wall-clock this session was ~2.5–6× slower than §18's uncontended benchmark. The desktop was
+  CPU-loaded (~37% with the simulation idle), so the replay to the peak took 30.9 min.
+
 To run the CA-engine PoC directly (bare-metal, unrelated to Docker): `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 
 To run the real end-to-end CSI validation against the May 2024 event (bare-metal, expect ~30 minutes):
@@ -991,23 +1094,27 @@ frontend/
     main.tsx              # imports leaflet.css + index.css (Tailwind), renders <App/>
     App.tsx                # 3-column layout: ConfigPanel | FloodMap (one map, or two panes in Compare) | LogPanel
     index.css                # @import "tailwindcss";
-    types/simulation.ts        # TS mirror of the backend JSON contract (incl. Bounds, mode, resolution, fast-frame fields)
+    types/simulation.ts        # TS mirror of the backend JSON contract (incl. Bounds, mode, resolution, fast-frame fields) + client-side CompactFrame
     presets.ts                 # MAY_2024_REPLAY (the validated 90m fast + temporal-to-peak scenario), DEFAULT_OUTFLOW_FRACTION
     api/
       config.ts                 # API_BASE_URL / WS_BASE_URL (VITE_API_BASE_URL, default localhost:8000)
       client.ts                  # createSimulation() -> POST /simulations
       stream.ts                   # openSimulationStream() -> WebSocket wrapper (handles code 4004, disconnects)
     hooks/
-      useSimulationRun.ts          # orchestration: idle -> starting -> streaming -> done|stopped|error, per-engine result layers, May 2024 replay chain
+      useSimulationRun.ts          # orchestration: idle -> starting -> streaming -> done|stopped|error, per-engine result layers (+ temporal frame buffer), May 2024 replay chain
+      useTimeline.ts               # which buffered temporal frame is shown: follow live / paused at a step / 8 fps replay
     rendering/
-      depthToImage.ts               # temporal: DEPTH_BANDS (fixed 6-band blue depth scale); fast: one flat extent color -> canvas data URL; flooded-cell and agreement counts
+      depthToImage.ts               # temporal: DEPTH_BANDS (fixed 6-band blue depth scale); fast: one flat extent color -> canvas data URL; flooded-cell and agreement counts (flat Float32Array grids)
+      depthGrid.ts                  # DepthGrid (Float32Array in a private field) + CompactFrame; wire frame -> compact on arrival
+      frameBuffer.ts                # bounded FrameBuffer of CompactFrames (32 MiB budget, stride-doubling decimation)
     components/
       ConfigPanel.tsx                # "Replay May 2024 flood" preset; engine toggle (temporal/fast), grid, scenario + steps/frame_interval/outflow_fraction, Stop
       FloodMap.tsx                    # Temporal/Fast/Compare view selector; Compare = two synced MapPanes side by side, each with its own legend
       MapPane.tsx                      # one plain Leaflet map: OSM tiles + L.ImageOverlay via API bounds + its legend, ResizeObserver-aware
       DepthLegend.tsx                   # depth -> color key with numeric ranges, read from DEPTH_BANDS (temporal pane)
       ExtentLegend.tsx                  # fast pane key: one flooded color, "extent only, depth not calibrated"
-      LogPanel.tsx                     # status/grid_shape/bounds, temporal-vs-fast comparison block, scrolling log, errors
+      LogPanel.tsx                     # status/grid_shape/bounds, temporal-vs-fast comparison block (at the timeline's frame), scrolling log, errors
+      Timeline.tsx                     # scrubber under the temporal pane: slider, play/pause, jump to live, per-frame readout (t, flooded, volume balance)
 ```
 
 `data/raw/` and `data/processed/` now hold real (gitignored) files once `download_dem.py`/
@@ -1069,10 +1176,8 @@ they'd cost and whether they touch the TCC's documented model:
 - Visual polish: ~~better depth→color ramp/legend~~ *(done — fixed 6-band blue scale with a numeric
   legend, see "Frontend visual polish" in Current status)*; still open: smoother frame-to-frame
   transitions, terrain shading under the flood overlay.
-- Timeline scrubber: buffer received frames client-side (`{step, depth, volume}` per frame already
-  has everything needed) and add a slider to re-render any past frame instead of only ever showing
-  the live one. Fully independent of every other item here — buildable against what already exists
-  today.
+- ~~Timeline scrubber~~ *(done — bounded Float32Array frame buffer + slider/replay under the temporal pane,
+  see "Timeline scrubber" in Current status)*.
 
 **Moderate — small engine option, no change to the documented base model:**
 - Neighborhood-type toggle (Moore vs. von Neumann) in the config panel — the engine is Moore-only

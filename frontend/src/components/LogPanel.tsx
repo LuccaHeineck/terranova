@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react'
 import type { Bounds } from '../types/simulation'
+import type { CompactFrame } from '../rendering/depthGrid'
 import type { ResultLayer, ResultLayers, SimulationStatus } from '../hooks/useSimulationRun'
 import { compareExtents, countFlooded, FLOODED_DEPTH_THRESHOLD_M } from '../rendering/depthToImage'
 
@@ -8,6 +9,10 @@ interface LogPanelProps {
   gridShape: [number, number] | null
   bounds: Bounds | null
   layers: ResultLayers
+  /** The temporal frame the timeline has selected; the comparison describes that one, as the map does. */
+  temporalFrame: CompactFrame | null
+  /** Whether that is the newest frame (following live / latest) rather than one scrubbed back to. */
+  followingLatest: boolean
   log: string[]
   error: string | null
 }
@@ -31,9 +36,15 @@ function wallClock(layer: ResultLayer): string {
   return `${formatDuration(layer.wallClockSeconds)}${layer.finished ? '' : ' so far'}`
 }
 
+interface ComparisonProps {
+  temporal: ResultLayer
+  fast: ResultLayer
+  temporalFrame: CompactFrame
+  followingLatest: boolean
+}
+
 /** Shown only when both engines have a result for the same scenario and grid (see useSimulationRun). */
-function Comparison({ temporal, fast }: { temporal: ResultLayer; fast: ResultLayer }) {
-  const temporalFrame = temporal.frame!
+function Comparison({ temporal, fast, temporalFrame, followingLatest }: ComparisonProps) {
   const fastFrame = fast.frame!
   const agreement = useMemo(
     () => compareExtents(temporalFrame.depth, fastFrame.depth),
@@ -47,7 +58,9 @@ function Comparison({ temporal, fast }: { temporal: ResultLayer; fast: ResultLay
 
   return (
     <div className="flex flex-col gap-1 rounded border border-gray-200 bg-white p-2 text-xs text-gray-700">
-      <div className="font-semibold text-gray-900">Comparison ({temporal.resolution} m grid)</div>
+      <div className="font-semibold text-gray-900">
+        Comparison ({temporal.resolution} m grid{followingLatest ? '' : ', temporal frame selected on the timeline'})
+      </div>
       <div>
         <span className="font-medium">Temporal:</span> {temporalFlooded} cells flooded at t={elapsedHours.toFixed(1)} h,
         wall-clock {wallClock(temporal)}
@@ -76,7 +89,7 @@ function Comparison({ temporal, fast }: { temporal: ResultLayer; fast: ResultLay
 /** Pixels from the bottom within which the log still counts as scrolled to the end. */
 const STICK_TO_BOTTOM_PX = 24
 
-export function LogPanel({ status, gridShape, bounds, layers, log, error }: LogPanelProps) {
+export function LogPanel({ status, gridShape, bounds, layers, temporalFrame, followingLatest, log, error }: LogPanelProps) {
   const { temporal, fast } = layers
   const logRef = useRef<HTMLUListElement | null>(null)
   const atBottomRef = useRef(true)
@@ -111,7 +124,9 @@ export function LogPanel({ status, gridShape, bounds, layers, log, error }: LogP
         <div className="rounded border border-red-300 bg-red-50 p-2 text-sm text-red-700">{error}</div>
       )}
 
-      {temporal?.frame && fast?.frame && <Comparison temporal={temporal} fast={fast} />}
+      {temporal && temporalFrame && fast?.frame && (
+        <Comparison temporal={temporal} fast={fast} temporalFrame={temporalFrame} followingLatest={followingLatest} />
+      )}
 
       <ul
         ref={logRef}

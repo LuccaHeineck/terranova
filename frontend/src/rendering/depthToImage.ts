@@ -1,3 +1,5 @@
+import type { DepthGrid } from './depthGrid'
+
 /**
  * Wet-cell cutoff for comparing extents, in meters. Mirrors the backend's
  * FLOODED_DEPTH_THRESHOLD_M (api/routers/simulations.py). Keep the two in sync by hand.
@@ -74,39 +76,38 @@ function bandIndex(d: number): number {
 }
 
 /** Temporal overlay: each wet cell takes its depth band's color. */
-export function depthToImageDataUrl(depth: number[][]): string {
-  return rasterize(depth, (d) => BAND_RGB[bandIndex(d)])
+export function depthToImageDataUrl(grid: DepthGrid): string {
+  return rasterize(grid, (d) => BAND_RGB[bandIndex(d)])
 }
 
 /** Fast overlay: every wet cell takes FAST_EXTENT_COLOR - extent only, no depth. */
-export function extentToImageDataUrl(depth: number[][]): string {
-  return rasterize(depth, () => FAST_EXTENT_RGB)
+export function extentToImageDataUrl(grid: DepthGrid): string {
+  return rasterize(grid, () => FAST_EXTENT_RGB)
 }
 
-/** Rasterizes a depth grid to a data URL: dry cells are transparent, wet ones take `colorOf(depth)`. */
-function rasterize(depth: number[][], colorOf: (d: number) => Rgb): string {
-  const rows = depth.length
-  const cols = depth[0]?.length ?? 0
+/**
+ * Rasterizes a row-major depth grid to a data URL: dry cells are transparent, wet ones take `colorOf(depth)`.
+ * Cell i is pixel i, since both the grid and ImageData are row-major.
+ */
+function rasterize({ values: depth, rows, cols }: DepthGrid, colorOf: (d: number) => Rgb): string {
   const canvas = document.createElement('canvas')
   canvas.width = cols
   canvas.height = rows
   const ctx = canvas.getContext('2d')!
   const image = ctx.createImageData(cols, rows)
 
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const d = depth[r][c]
-      const i = (r * cols + c) * 4
-      if (!isWet(d)) {
-        image.data[i + 3] = 0
-        continue
-      }
-      const [red, green, blue] = colorOf(d)
-      image.data[i] = red
-      image.data[i + 1] = green
-      image.data[i + 2] = blue
-      image.data[i + 3] = 255
+  for (let cell = 0; cell < depth.length; cell++) {
+    const d = depth[cell]
+    const i = cell * 4
+    if (!isWet(d)) {
+      image.data[i + 3] = 0
+      continue
     }
+    const [red, green, blue] = colorOf(d)
+    image.data[i] = red
+    image.data[i + 1] = green
+    image.data[i + 2] = blue
+    image.data[i + 3] = 255
   }
 
   ctx.putImageData(image, 0, 0)
@@ -123,32 +124,26 @@ function isWet(d: number): boolean {
   return d > FLOODED_DEPTH_THRESHOLD_M
 }
 
-export function countFlooded(depth: number[][]): number {
+export function countFlooded({ values: depth }: DepthGrid): number {
   let count = 0
-  for (const row of depth) {
-    for (const value of row) {
-      if (isWet(value)) count++
-    }
+  for (let cell = 0; cell < depth.length; cell++) {
+    if (isWet(depth[cell])) count++
   }
   return count
 }
 
-function sameShape(a: number[][], b: number[][]): boolean {
-  return a.length === b.length && (a[0]?.length ?? 0) === (b[0]?.length ?? 0)
-}
-
 /** Cell counts of where two extents agree and disagree, or null if the grids differ. */
-export function compareExtents(temporal: number[][], fast: number[][]): ExtentAgreement | null {
-  if (!sameShape(temporal, fast)) return null
+export function compareExtents(temporalGrid: DepthGrid, fastGrid: DepthGrid): ExtentAgreement | null {
+  if (temporalGrid.rows !== fastGrid.rows || temporalGrid.cols !== fastGrid.cols) return null
+  const temporal = temporalGrid.values
+  const fast = fastGrid.values
   const counts: ExtentAgreement = { both: 0, temporalOnly: 0, fastOnly: 0 }
-  for (let r = 0; r < temporal.length; r++) {
-    for (let c = 0; c < temporal[r].length; c++) {
-      const t = isWet(temporal[r][c])
-      const f = isWet(fast[r][c])
-      if (t && f) counts.both++
-      else if (t) counts.temporalOnly++
-      else if (f) counts.fastOnly++
-    }
+  for (let cell = 0; cell < temporal.length; cell++) {
+    const t = isWet(temporal[cell])
+    const f = isWet(fast[cell])
+    if (t && f) counts.both++
+    else if (t) counts.temporalOnly++
+    else if (f) counts.fastOnly++
   }
   return counts
 }

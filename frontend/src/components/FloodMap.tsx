@@ -2,11 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import L from 'leaflet'
 import type { Bounds } from '../types/simulation'
-import type { Engine, ResultLayer, ResultLayers } from '../hooks/useSimulationRun'
+import type { CompactFrame, DepthGrid } from '../rendering/depthGrid'
+import type { Engine, ResultLayers } from '../hooks/useSimulationRun'
+import type { Timeline as TimelineState } from '../hooks/useTimeline'
 import { depthToImageDataUrl, extentToImageDataUrl } from '../rendering/depthToImage'
 import { DepthLegend } from './DepthLegend'
 import { ExtentLegend } from './ExtentLegend'
 import { MapPane } from './MapPane'
+import { Timeline } from './Timeline'
 
 type MapView = Engine | 'compare'
 
@@ -16,6 +19,8 @@ interface FloodMapProps {
   activeEngine: Engine
   runCount: number
   replayActive: boolean
+  /** Which temporal frame is shown: the timeline drives the temporal pane (never the fast one). */
+  timeline: TimelineState
 }
 
 const VIEW_LABEL: Record<MapView, string> = {
@@ -43,15 +48,15 @@ function resolveView(view: MapView, available: Record<MapView, boolean>): MapVie
   return available[other] ? other : null
 }
 
-function paneLabel(engine: Engine, layer: ResultLayer | null): string {
-  if (!layer?.frame) return engine === 'fast' ? 'Fast: computing…' : 'Temporal CA: starting…'
+function paneLabel(engine: Engine, frame: CompactFrame | null): string {
+  if (!frame) return engine === 'fast' ? 'Fast: computing…' : 'Temporal CA: starting…'
   if (engine === 'fast') return 'Fast: steady peak extent'
-  const hours = (layer?.frame?.elapsed_time ?? 0) / 3600
+  const hours = (frame.elapsed_time ?? 0) / 3600
   return `Temporal CA: t = ${hours.toFixed(1)} h`
 }
 
 // The temporal overlay is shaded by depth; the fast one shows extent only, since its depths are not calibrated.
-const RENDER: Record<Engine, (depth: number[][]) => string> = {
+const RENDER: Record<Engine, (grid: DepthGrid) => string> = {
   temporal: depthToImageDataUrl,
   fast: extentToImageDataUrl,
 }
@@ -61,9 +66,8 @@ const LEGEND: Record<Engine, ReactNode> = {
   fast: <ExtentLegend />,
 }
 
-/** Rasterized overlay for one engine's latest frame, recomputed only when that frame changes. */
-function useOverlayUrl(engine: Engine, layer: ResultLayer | null, needed: boolean): string | null {
-  const frame = layer?.frame
+/** Rasterized overlay for one engine's shown frame, recomputed only when that frame changes. */
+function useOverlayUrl(engine: Engine, frame: CompactFrame | null, needed: boolean): string | null {
   return useMemo(() => (needed && frame ? RENDER[engine](frame.depth) : null), [engine, needed, frame])
 }
 
@@ -119,7 +123,7 @@ function useSyncedMaps(bounds: Bounds | null) {
   return { onPrimaryReady, onSecondaryReady }
 }
 
-export function FloodMap({ bounds, layers, activeEngine, runCount, replayActive }: FloodMapProps) {
+export function FloodMap({ bounds, layers, activeEngine, runCount, replayActive, timeline }: FloodMapProps) {
   // A manual view choice only lasts for the run it was made in; a new run shows the engine just run, or
   // Compare for the May 2024 replay.
   const [choice, setChoice] = useState<{ view: MapView; runCount: number } | null>(null)
@@ -129,20 +133,22 @@ export function FloodMap({ bounds, layers, activeEngine, runCount, replayActive 
   const shown = resolveView(view, available)
   const compare = shown === 'compare'
 
-  const temporalUrl = useOverlayUrl('temporal', layers.temporal, shown === 'temporal' || compare)
-  const fastUrl = useOverlayUrl('fast', layers.fast, shown === 'fast' || compare)
+  const showsTemporal = shown === 'temporal' || compare
+  // The temporal pane draws the timeline's selected frame (the newest one while following live).
+  const temporalUrl = useOverlayUrl('temporal', timeline.frame, showsTemporal)
+  const fastUrl = useOverlayUrl('fast', layers.fast?.frame ?? null, shown === 'fast' || compare)
   // The primary pane shows the temporal result, or the fast one when that's the only view.
   const primary: Engine = shown === 'fast' ? 'fast' : 'temporal'
   const { onPrimaryReady, onSecondaryReady } = useSyncedMaps(bounds)
 
   return (
-    <div className="relative h-full w-full">
+    <div className="relative flex h-full w-full flex-col">
       {/* The primary pane stays mounted across view changes; Compare adds the fast pane beside it. */}
-      <div className={`grid h-full w-full ${compare ? 'grid-cols-2 gap-0.5 bg-gray-400' : 'grid-cols-1'}`}>
+      <div className={`grid min-h-0 w-full flex-1 ${compare ? 'grid-cols-2 gap-0.5 bg-gray-400' : 'grid-cols-1'}`}>
         <MapPane
           bounds={bounds}
           imageUrl={primary === 'fast' ? fastUrl : temporalUrl}
-          label={compare ? paneLabel('temporal', layers.temporal) : undefined}
+          label={compare ? paneLabel('temporal', timeline.frame) : undefined}
           legend={shown ? LEGEND[primary] : undefined}
           onMapReady={onPrimaryReady}
         />
@@ -150,13 +156,25 @@ export function FloodMap({ bounds, layers, activeEngine, runCount, replayActive 
           <MapPane
             bounds={bounds}
             imageUrl={fastUrl}
-            label={paneLabel('fast', layers.fast)}
+            label={paneLabel('fast', layers.fast?.frame ?? null)}
             legend={LEGEND.fast}
             fitOnMount={false}
             onMapReady={onSecondaryReady}
           />
         )}
       </div>
+
+      {/* The timeline sits under the temporal pane only: the fast mode has a single frame to show. */}
+      {showsTemporal && timeline.frame && (
+        <div className={`grid w-full ${compare ? 'grid-cols-2 gap-0.5 bg-gray-400' : 'grid-cols-1'}`}>
+          <Timeline timeline={timeline} compare={compare} />
+          {compare && (
+            <div className="flex items-center justify-center border-t border-gray-300 bg-gray-50 p-3 text-center text-xs text-gray-500">
+              Fast mode: one steady frame at the peak. It does not follow the timeline.
+            </div>
+          )}
+        </div>
+      )}
 
       {(available.temporal || available.fast) && (
         <div className="absolute top-3 right-3 z-1000 flex flex-col gap-1.5 rounded-md bg-white/95 p-2 text-xs shadow-md">
