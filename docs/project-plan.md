@@ -509,7 +509,8 @@ time — closing the gap the outlet-boundary work above flagged as a prerequisit
   something to fix by adjusting the metric.
 - **RMSE explicitly deferred, not attempted this step** - the only HWM data found is a CPRM PDF technical
   report with no confirmed structured/tabular extract for this project's small ROI; documented in
-  `docs/tcc-deviations.md` section 13 rather than silently skipped.
+  `docs/tcc-deviations.md` section 14 rather than silently skipped. *(Since formally closed as a
+  data-availability limitation, not pursued further - see `docs/tcc-deviations.md` §20.)*
 - **`backend/tests/`**: `test_flood_extent.py` (5 new: rasterization onto a hand-built grid with a
   hand-computed expected mask, a same-CRS reprojection identity check, the full ingestion pipeline
   against synthetic fixtures, and the multiple-features rejection), `test_metrics.py` (6 new: CSI/HR/FAR
@@ -800,9 +801,9 @@ First version (deliberately simpler than the TCC's full documented model): redis
     through the actual May 2024 peak scored **CSI 0.133** against it (later follow-up investigation found
     this under-predicted due to a reference-data gap and an uncalibrated interior parameter — see the
     "May 2024 CSI validation" entry in "Current status" above for the corrected **CSI 0.8997** and
-    `docs/tcc-deviations.md` §16 for the full investigation). RMSE (depth vs. HWM/SWOT) is deliberately
-    deferred - see "Step 10 done" above and `docs/tcc-deviations.md` sections 12-13 for the full design
-    and both decisions.
+    `docs/tcc-deviations.md` §16 for the full investigation). RMSE (depth vs. HWM/SWOT) is **closed as a
+    data-availability limitation**: no structured HWM dataset exists for this ROI (only a CPRM PDF
+    report), so validation is extent-only - see `docs/tcc-deviations.md` §20.
 11. **Performance benchmarking** *(current step)* — vectorized NumPy vs. loop-based comparison, exploratory CuPy/GPU, run against the real event replay from steps 9–10.
 
 Update the "Current status" section above as steps complete — this file is meant to be read at the start of future sessions instead of re-deriving the plan from scratch.

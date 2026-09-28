@@ -357,8 +357,9 @@ touching `lajeado_estrela_z.tif`/`_n.tif`. `ingestion.landcover.build_roughness_
 — it already aligns to whatever reference grid it's given. A deliberate, documented wall-clock tradeoff,
 not a claim that 90m is the "right" resolution for this model.
 
-**Deviation 2 — RMSE is not implemented this step.** See section 13 below for why (no confirmed
-structured HWM dataset for this small ROI) and its deferred status.
+**Deviation 2 — RMSE is not implemented this step.** See section 14 below for why (no confirmed
+structured HWM dataset for this small ROI). *(Since formally closed as a data-availability
+limitation - see §20.)*
 
 **Deviation 3 — the validation loop is a deliberate duplicate, not a shared function.**
 `api/routers/simulations.py::_run_gauge_driven` is an async WebSocket coroutine inside `api/`, which
@@ -461,7 +462,8 @@ regardless of run order.
   is a CPRM PDF technical report (`nota_tecnica_levantamento_cheias_2024_rs.pdf`, a statewide May-2024
   survey) with no confirmed structured/tabular extract for this project's small Lajeado/Estrela ROI
   specifically. Extracting a clean point dataset from it (or sourcing SWOT points instead) is future
-  work, not blocking step 10's CSI deliverable.
+  work, not blocking step 10's CSI deliverable. *(Since closed, not pursued: see §20 - documented as a
+  data-availability limitation.)*
 - **GPU/CuPy performance benchmarking** — TCC1's stack rationale names CuPy-compatibility as a design
   goal; the NumPy code has been kept vectorized/CuPy-compatible throughout, but nothing has actually
   been run on a GPU yet. *(Since done, first pass: see §18 - CuPy is kernel-launch-bound on this
@@ -835,6 +837,32 @@ A naive NumPy -> CuPy array swap adds nothing at 90m and ~2x at 30m, which does 
 migration or live-API integration as-is. The GPU follow-up worth trying is a fused single-kernel substep
 (one CuPy `ElementwiseKernel`/`RawKernel` per pass), which targets the launch overhead that dominates
 here. It is relevant only at 30m or finer.
+
+---
+
+## 20. RMSE against high-water marks — closed as a data-availability limitation
+
+**TCC1:** the validation methodology (section 4.5.2) plans two metrics. CSI covers spatial extent
+(implemented; see §12 and §16). RMSE covers vertical accuracy: simulated depth against observed
+high-water marks (HWM) at point locations.
+
+**Status: closed, not pursued further.** RMSE against HWM was not implemented, and this is now a
+documented limitation rather than open work. **No structured or tabular HWM dataset exists for this
+project's small Lajeado/Estrela ROI.** The only source found is a CPRM PDF technical report
+(`nota_tecnica_levantamento_cheias_2024_rs.pdf`), a statewide survey of the May 2024 floods. It has no
+machine-readable extract of point coordinates and water levels that could be joined to the simulation
+grid. Building a point dataset by hand from a PDF would add manual-transcription error to a metric
+whose job is to measure small depth errors, so it was not attempted.
+
+The one independent source that did cover this ROI, a NASA/CNES SWOT raster pass (§16.5), gives
+water *fraction* per pixel, not point water-surface or depth observations. It is also mostly
+"suspect" quality, and it is four days after the peak. So it cannot stand in for HWM in an RMSE either;
+it is used only as corroborating evidence for the extent narrative.
+
+**Consequence for the write-up:** validation in this project is extent-only (CSI, with Hit Rate and
+False Alarm Rate), and vertical accuracy is not quantified against observations. This should be stated
+as a data-availability limitation of the study area, not as a methodological choice. `validation/`
+therefore implements only the extent metrics; no RMSE code exists or is planned.
 
 ---
 
