@@ -963,6 +963,79 @@ therefore implements only the extent metrics; no RMSE code exists or is planned.
 
 ---
 
+## 21. Fast mode in the live API — one frame on the existing stream, and a 90m grid option
+
+**TCC1:** the planned architecture (§5/§6) is a REST call that starts a run, plus a WebSocket that streams
+its frames. It predates the hybrid architecture (§17), so it says nothing about a mode with no time
+steps. §19 validated the fast mode offline only. This section records how it was put into the app.
+
+**Decision: a third `mode` on the existing contract, not a separate REST endpoint.**
+`POST /simulations {"mode": "fast", "resolution": 30|90}` registers the run as before. Then
+`WS /simulations/{run_id}/stream` sends **exactly one frame** (`step: 0`, the steady depth grid,
+`peak_discharge_m3s`, `outflow_m3s`/`retained_m3s`, `flooded_cells`, `compute_seconds`) followed by
+`{"done": true}`. A plain `POST /simulations/fast` that returned the depth grid directly was the
+alternative. It would describe a timeless result more literally. It was not chosen, for these reasons:
+- The API's shape is "validate and register, then consume once". Run-id lifecycle, single use, the
+  4004 unknown-run close, `grid_shape`/`bounds` and the 503 when no hydrograph is loaded all carry over
+  unchanged.
+- A one-frame stream is already a valid case of the contract. A `seeded_pool` run with `steps=1` looks
+  the same.
+- The whole frontend pipeline consumes frames: the run state machine, the stream's error handling, the
+  map overlay and the log. A REST endpoint would need a second fetch path and a second response type,
+  and would buy nothing.
+
+The cost is that a result with no time sits inside a "stream". The protocol states this explicitly:
+`step: 0` and no `elapsed_time`. `volume` is still sent. It is the steady depth summed over cells, in
+the same unit as the temporal frames, but here it is not a conserved quantity. The fast engine's own
+invariant, discharge continuity, is asserted server-side as in `examples/fast_mode_may2024.py`. The
+classification runs in a worker thread (`asyncio.to_thread`) because both of its passes are plain
+Python loops.
+
+**The live API now also serves the 90m validation grid (`resolution=90`), and gauge-driven runs can
+`stop_at_peak`.** At 30m a temporal run needs hours to reach the May 2024 peak (§13/§18). The fast mode
+models that peak. So without these two options, no temporal result you could place next to a fast
+one in a browser session would be from the same moment. The 90m grid is built by the same
+ingestion calls `examples/validate_may2024.py` uses. With both options, the app reproduces §19's
+comparison live, on the same grid, at the same moment. 30m remains the default.
+
+**The Estrela-gap correction (§16.2) is not applied in the API, deliberately.** It changes which cells
+are *scored*, not the simulated extent, and the API does no scoring. The UI compares the two engines'
+extents with each other (cells flooded in both / only one), not against the SGB reference. Putting CSI
+in the UI, naive or gap-corrected, is a separate follow-up. The gap correction would first have to move
+out of `examples/`, which `api/` may not import.
+
+**Live results** (real servers, driven through a real browser):
+- **Fast @ 90m**: 2,840 flooded cells, **exactly §19's naive TP + FP (731 + 2,109)**, so the API path
+  reproduces the offline validation cell for cell. Continuity held: 23,472.4 m³/s out, 0 retained. The
+  engine took ~0.16–0.33 s per request, against §19's 74 ms median of repeated in-process calls.
+- **Temporal gauge-driven @ 90m, `stop_at_peak`**: reached the peak (133.5 h) at step **134,639** with
+  **1,955** flooded cells. That is §18's exact step count and §18's naive TP + FP (789 + 1,166), so the
+  API's loop reproduces the offline runner cell for cell. It took 20.4 min of wall-clock. §18 measured
+  7.6 min uncontended, but in this session `benchmark_backends.py` itself measured ~17 ms/step against
+  §18's 3.3 ms, so the difference is machine load, not the API.
+- **Compare view, same grid, same moment:** 1,648 cells flooded in both, 1,192 fast only, 307 temporal
+  only. The fast-only cells sit up the north-western side valley and on the eastern high ground, the
+  lateral-rule over-prediction §19 describes. The temporal-only cells cluster around Estrela and the
+  south outlet, the backwater-controlled flooding a local steady Manning rule can't represent. So the
+  live view shows the same error pattern §19 found offline: 213 ms vs. 20 min to a final extent, and a
+  visibly different extent.
+- **Fast @ 30m (not validated against the reference)**: 13,987 of 35,136 cells flooded (39.8%),
+  continuity exact, ~1–1.8 s of engine time. §19 was only ever scored at 90m. The 30m result has not been
+  scored, and `_MIN_SLOPE`'s dominance (§19) may play out differently on the finer grid. Treat the 30m
+  number as a working display, not a validated one.
+
+**Also fixed while verifying this: temporal runs now stop when the client leaves.** Both temporal loops
+now `await asyncio.sleep(0)` every engine step, and a watcher task notices the WebSocket disconnect. So
+a stopped or abandoned run ends within one step. Before, it computed on until its next frame send, which
+at 30m with `frame_interval=500` is over a minute. Other requests are also served during a long run,
+not only between frames. This was step 9's documented "no yield points" limitation, and it became
+blocking once a user could stop a gauge-driven run and immediately start a fast one: the fast run's
+POST sat unanswered until the abandoned run's next frame. It is covered by
+`test_stream_simulation_stops_computing_when_client_disconnects`. The per-step cost of the yield is
+negligible against a 3–17 ms engine step.
+
+---
+
 *Keep this file updated alongside `docs/project-plan.md` whenever a new roadmap step introduces another
 point of comparison to TCC1 — the goal is that by the time the thesis is written, every "we said X, we
 did Y" question already has its answer and rationale sitting here instead of needing to be

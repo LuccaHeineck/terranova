@@ -1,8 +1,16 @@
+export type RunMode = 'seeded_pool' | 'gauge_driven' | 'fast'
+
+/** Served grid resolutions, in meters: the live grid and the validation grid. */
+export type Resolution = 30 | 90
+
 export interface SimulationParams {
-  mode?: 'seeded_pool' | 'gauge_driven'
+  mode?: RunMode
+  resolution?: Resolution
   steps?: number
-  frame_interval: number
+  // Temporal modes only - a fast run has no time steps, and the backend rejects these for it.
+  frame_interval?: number
   outflow_fraction?: number
+  stop_at_peak?: boolean
 }
 
 export interface Bounds {
@@ -19,11 +27,21 @@ export interface SimulationCreated {
 }
 
 export interface SimulationFrame {
+  /** 0 for a fast-mode frame (no time integration). */
   step: number
   depth: number[][]
   volume: number
+  // gauge_driven frames
   elapsed_time?: number
   cumulative_inflow?: number
+  cumulative_outflow?: number
+  // fast frames (the single frame of a fast run)
+  peak_discharge_m3s?: number
+  peak_elapsed_time?: number
+  outflow_m3s?: number
+  retained_m3s?: number
+  flooded_cells?: number
+  compute_seconds?: number
 }
 
 export interface SimulationDone {

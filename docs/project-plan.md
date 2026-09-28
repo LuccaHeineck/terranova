@@ -697,7 +697,151 @@ so the four states (DRY / CONVEYING / INUNDATED / EXITING) are this project's ow
   regression. The regression is the suite's first data-dependent test; it is skipped when the raw data
   is absent. Suite: 98/98 passing.
 - No API or frontend changes; wiring the mode in is a deliberate next step. Full write-up:
-  `docs/tcc-deviations.md` §19.
+  `docs/tcc-deviations.md` §19. *(Since done — see the next entry.)*
+
+**Fast mode wired into the live API + a basic temporal/fast comparison view.** The §19 fast mode is now
+reachable from the app, not only from `examples/fast_mode_may2024.py`. Full rationale in
+`docs/tcc-deviations.md` §21.
+- **API:** `mode: "fast"` is a third mode on the existing `POST /simulations` + WebSocket contract. It
+  is not a separate REST endpoint. Its stream is exactly one frame (`step: 0`, steady depth, peak
+  discharge, outflow/retained, `flooded_cells`, `compute_seconds`), then `done`. Temporal-only
+  parameters (`steps`, `frame_interval`, `outflow_fraction`, `stop_at_peak`) are rejected with a 422,
+  and a missing hydrograph gives a 503, as for gauge-driven runs. Forcing is the hydrograph's real
+  peak, via new `Hydrograph.peak_elapsed_seconds`/`peak_discharge_m3s` properties (verified identical
+  to the stage-series `argmax` the examples use: 23,472.37 m³/s at 133.5 h).
+- **The 90m validation grid is now served live** (`resolution: 30 | 90`, default 30), and gauge-driven
+  runs can `stop_at_peak`. Together they let a temporal run reach the moment the fast mode models in
+  minutes rather than hours. `api/state.py` now holds one `Grid` bundle per resolution (`Z`, `N`,
+  `dx`, bounds, inflow mask, outlet), exposed as a single `get_grids` dependency, built by a shared
+  `_load_grid` in the lifespan. The inflow mask moved out of the best-effort hydrograph block, since it
+  only depends on `Z`.
+- **Abandoned runs now stop.** The temporal loops yield every engine step and watch for the client
+  disconnecting, so a stopped run ends within one step and other requests are served during a long
+  run. This resolves half of step 9's "CPU-bound handler with no yield points" limitation; the other
+  half, runtime itself, is still step 11's.
+- **Frontend:**
+  - Engine toggle (Temporal CA / Fast) plus a Grid select in `ConfigPanel`, and a Stop button.
+  - `useSimulationRun` keeps the latest result of each engine as a separate layer. A layer survives
+    the other engine's next run only if it is the same scenario on the same grid (gauge-driven ↔
+    fast). Anything else is cleared when the next run starts, so no stale result from another mode
+    stays on screen.
+  - `FloodMap` has Temporal / Fast / Compare views. Compare is a categorical map: flooded in both,
+    temporal only, fast only.
+  - `LogPanel` shows a comparison block: flooded cells, wall-clock, agreement counts, and a warning
+    when the temporal run hasn't reached the peak yet.
+- **Verified in a real browser** (Playwright + real Chromium against real `uvicorn` + `npm run dev`):
+  - **Fast @ 90m** gave 2,840 flooded cells, exactly §19's naive TP + FP.
+  - **Fast @ 30m** gave 13,987 of 35,136 cells in ~1–2 s. It is unvalidated at 30m.
+  - **Temporal gauge-driven @ 90m with `stop_at_peak`** reached the peak at step 134,639 with 1,955
+    flooded cells. Both match §18 exactly (step count, and naive TP + FP 789 + 1,166).
+  - **Compare view:** 1,648 cells flooded in both, 1,192 fast only (upstream side valley and eastern high
+    ground), 307 temporal only (Estrela/outlet backwater). It took 213 ms vs. 20.4 min of wall-clock;
+    the machine was ~5x slower than §18's uncontended benchmark during this session.
+  - **Stale-state checks passed:**
+    - Stop keeps the last temporal frame.
+    - A fast run then compares against it, with the "different moments" warning.
+    - A grid change clears both layers.
+    - A seeded-pool run clears the fast layer.
+  - **Two real bugs were caught this way, not by `tsc`:**
+    - Stop restarted the run: React reused the `<button>` and flipped it to `type=submit` mid-click.
+    - The abandoned-run blocking described above.
+- **Tests:** 14 new (1 in `test_hydrograph.py`, 13 in `test_api.py`). `test_api.py`'s overrides moved to
+  `get_grids`. Suite: 112/112.
+- **Not done here, by design:** visual polish and the timeline scrubber (separate follow-ups), CSI in
+  the UI (the API does no scoring, so the Estrela-gap correction doesn't apply — §21), and a two-pane
+  side-by-side layout. This version is an overlay comparison on one map. *(Visual polish and the
+  two-pane layout since done — see the next entry.)*
+
+**Frontend visual polish: fixed depth scale, designed ramp + legend, two-pane Compare.** Three
+changes, each verified in a real browser (Playwright + Chromium against real `uvicorn` + `npm run dev`)
+before the next was started. Frontend only; no backend or engine change.
+- **Dim temporal overlay, fixed with a fixed depth scale.** The overlay normalized each frame to a
+  running max over the run's frames. A gauge-driven run's step 1 pushes the whole river's discharge
+  into the 9 inflow-mask cells: measured at 250.2 m on the 30m grid, still 114 m at step 10, and down
+  to the real flood's ~12–14 m only after ~200 steps. If any frame landed in that window (a small
+  `frame_interval`), the running max stayed pinned there for the rest of the run. Reproduced at
+  `frame_interval=1`: after 200 frames every wet pixel sat in the lowest opacity bucket, 7 distinct
+  colors in all. The default interval of 500 happens to avoid it, since the first frame arrives after
+  the spike has decayed. The scale is now **fixed per ROI, not derived from data**. The reasons are in
+  the `DEPTH_BANDS` comment in `rendering/depthToImage.ts`:
+  - a legend's numbers must not change frame to frame;
+  - the temporal and fast overlays must share one scale;
+  - a per-frame percentile would make an early, shallow frame look as deep as the peak.
+
+  The same `frame_interval=1` run then showed 63 distinct colors spread across the scale. `maxDepth`
+  and `computeMaxDepth` were removed from the run state.
+- **The ceiling was measured, not guessed.** Real frames were collected from the live API (wet-cell
+  depth > 0.01 m):
+  - Temporal gauge-driven @ 90m: p99 ~13.5 m (median ~4 m) until the flood wave arrives. At the peak
+    (step 134,639, 1,955 wet cells, both matching §21): p50 9.3, p90 17.7, p95 22.7, p99 24.8, max
+    28.9 m.
+  - Temporal @ 30m, first 2 simulated hours: p99 11–14 m.
+  - Fast mode: median ~33 m, p95 55 m (90m) / 85 m (30m). That is §19's steady Manning channel
+    depth (the whole peak discharge through one-cell-wide channel cells at the `_MIN_SLOPE` floor),
+    a known limitation, not a rendering issue; only the fast mode's extent is validated.
+
+  The top band opens at **20 m**: the event's stage rise (~14 m → 33.66 m at the gauge), between the
+  temporal peak's p90 and p95. On the shared scale most of the fast extent lands in the top band.
+  That is deliberate: the two engines' depths really do differ that much.
+- **Designed ramp + legend.** Six discrete depth bands, the flood-hazard-map convention: 0.01–0.5,
+  0.5–2, 2–5, 5–10, 10–20 and ≥ 20 m. One blue hue, with lightness stepping down evenly in OKLCH
+  (0.64 → 0.30), generated along the hue of the `dataviz` skill's sequential blue and validated with
+  its ordinal-ramp checker: monotone lightness, adjacent ΔL ≥ 0.06, single hue. **The light end still
+  clears 2:1 contrast against OSM's own water color `#aad3df`** (2.12:1), and ~3:1 against OSM land.
+  The step-6 failure was a lighter blue overlay blending into OSM's river, so this is checked, not
+  assumed. A 7-band variant failed that check and was dropped.
+  - One ramp for both engines replaces the warm/cool split; pane and view labels name the engine.
+  - Uniform overlay opacity (0.8) replaces opacity-by-depth, so on-map colors match the legend.
+  - The transparent cutoff is now `FLOODED_DEPTH_THRESHOLD_M` (0.01 m) rather than 1e-6, so the
+    drawn extent is exactly the extent the log panel counts.
+  - `components/DepthLegend.tsx` renders the key, with labelled numeric ranges, from the same
+    `DEPTH_BANDS` array the rasterizer uses.
+- **Basemap back to standard OSM** (user decision), undoing the earlier switch to Esri Dark Gray
+  Canvas (commit `54efdb2`). The ramp above is designed for OSM's light tiles.
+- **Two-pane Compare.** Compare is now temporal | fast side by side, replacing the categorical
+  one-map overlay (`agreementToImageDataUrl`/`AGREEMENT_COLORS` removed). The log panel's agreement
+  counts (both / temporal only / fast only) are unchanged.
+  - The new `components/MapPane.tsx` owns one Leaflet map, its tile layer and its overlay.
+    `FloodMap.tsx` owns the view selector, the layout, one shared legend and the pan/zoom sync.
+  - **Pan/zoom are synced** with a small re-entrancy-guarded `setView` link, with no plugin.
+  - When Compare opens, the grid is refit into the half-width panes so the whole ROI shows in both.
+  - The primary pane stays mounted across view changes. A `ResizeObserver` → `invalidateSize()`
+    keeps it laid out correctly when the second pane appears or goes.
+- **Layout fix: the page no longer grows past the viewport** (pre-existing). The App grid's implicit
+  row was `auto`, and the log `<ul>`, a flex child with the default `min-height: auto`, grew with its
+  content instead of scrolling. So a long run stretched the whole page, map included (1,438 px tall
+  at 40 frames in a 900 px viewport), pushing the flood's southern half and the new legend below the
+  fold. Fixed with `grid-rows-1 overflow-hidden` on the App grid and `min-h-0` on the list. The log
+  also now follows new lines while scrolled to the bottom, and stops if the user scrolls up.
+- **Verified in the browser:**
+  - Temporal @ 30m (default interval and `frame_interval=1`), temporal @ 90m (early frames, and to
+    the peak: step 134,639 and 1,955 flooded cells, exactly §21, with depth structure visible
+    from the first frame at t ≈ 1 h through the peak), and fast @ 30m / 90m. A synthetic seeded-pool run stays visible in
+    the lowest bands, including where it lies over OSM's blue river.
+  - Compare @ 30m (fast + a stopped partial temporal run, with the "different moments" warning shown)
+    and Compare @ 90m (fast + temporal to the peak: 1,648 both / 307 temporal only / 1,192 fast only, identical to §21,
+    and correctly no "different moments" warning).
+  - Dragging one pane and zooming the other left both overlays at identical pane-relative pixel
+    positions (within 1 px). Switching Temporal → Compare → Temporal re-flowed the panes (1000 px ↔
+    2 × 499 px) without gray strips. A run on the other grid still clears the other layer and
+    disables Compare.
+- **Found in the browser, not by `tsc`/build:**
+  - The step-1 spike only pins the scale when a frame lands in the first ~200 steps. This corrected
+    the previous task's framing: it is not the default-interval case.
+  - Fast-mode depths are ~33–65 m, so a scale fitted to fast mode would flatten the temporal run.
+  - Compare opened on the single map's zoom, which cropped the western ROI in both half-width panes.
+    Fixed by the refit on open.
+  - The page grew past the viewport once the log filled up (the layout fix above). Previous
+    sessions' screenshots only ever captured the viewport, so it went unnoticed. It was caught here
+    because the map pane's measured height jumped from 900 to 1,438 px mid-run. The fix went out by
+    fast refresh during a live 90m run without dropping its WebSocket.
+
+  `oxlint` caught two `react(refs)` warnings (a ref written during render) and one fast-refresh
+  export warning, all fixed. `tsc -b`, `npm run build` and `npm run lint` are clean. Backend suite
+  112/112 (unchanged).
+- **Not done here, by design:** the timeline scrubber, smoother frame-to-frame transitions and
+  terrain shading (still backlog). The ramp depends on the basemap: switching basemaps again means
+  re-running the contrast check.
 
 To run the CA-engine PoC directly (bare-metal, unrelated to Docker): `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 
@@ -739,12 +883,12 @@ backend/
     fast_mode_may2024.py  # same event/grid/scoring for the non-temporal fast mode, vs. the temporal engine (§19)
   api/
     __init__.py
-    main.py             # FastAPI() app, lifespan loads Z/N/bounds/hydrograph (best-effort), includes routers
-    state.py            # holds loaded Z/N/bounds/hydrograph/inflow_mask, overridable FastAPI dependencies
+    main.py             # FastAPI() app, lifespan loads the 30m + 90m grids and the hydrograph (best-effort), includes routers
+    state.py            # Grid bundle per resolution (Z/N/dx/bounds/inflow mask/outlet) + hydrograph, overridable dependencies
     routers/
       __init__.py
       health.py         # GET /health -> {"status": "ok"}
-      simulations.py    # POST /simulations, WS /simulations/{run_id}/stream — seeded_pool + gauge_driven modes
+      simulations.py    # POST /simulations, WS /simulations/{run_id}/stream — seeded_pool, gauge_driven (+ stop_at_peak), fast (one frame)
   ingestion/
     __init__.py
     dem.py              # raw GeoTIFF -> reproject -> crop -> sink-fill -> Z array (step 3, resolution param since step 10)
@@ -778,21 +922,23 @@ frontend/
   vite.config.ts        # @vitejs/plugin-react + @tailwindcss/vite
   src/
     main.tsx              # imports leaflet.css + index.css (Tailwind), renders <App/>
-    App.tsx                # 3-column layout: ConfigPanel | FloodMap | LogPanel
+    App.tsx                # 3-column layout: ConfigPanel | FloodMap (one map, or two panes in Compare) | LogPanel
     index.css                # @import "tailwindcss";
-    types/simulation.ts        # TS mirror of the backend JSON contract (incl. Bounds, mode, elapsed_time)
+    types/simulation.ts        # TS mirror of the backend JSON contract (incl. Bounds, mode, resolution, fast-frame fields)
     api/
       config.ts                 # API_BASE_URL / WS_BASE_URL (VITE_API_BASE_URL, default localhost:8000)
       client.ts                  # createSimulation() -> POST /simulations
       stream.ts                   # openSimulationStream() -> WebSocket wrapper (handles code 4004, disconnects)
     hooks/
-      useSimulationRun.ts          # orchestration state machine: idle -> starting -> streaming -> done|error
+      useSimulationRun.ts          # orchestration: idle -> starting -> streaming -> done|stopped|error, + per-engine result layers
     rendering/
-      depthToImage.ts               # depth[][] -> canvas data URL, orange-red ramp (transparent at 0 depth)
+      depthToImage.ts               # DEPTH_BANDS (fixed 6-band blue depth scale) -> canvas data URL; flooded-cell and temporal/fast agreement counts
     components/
-      ConfigPanel.tsx                # mode toggle + steps/frame_interval/outflow_fraction form (step 9)
-      FloodMap.tsx                    # plain Leaflet + OSM tiles + L.ImageOverlay, positioned via API bounds
-      LogPanel.tsx                     # status/grid_shape/bounds + scrolling step/volume/elapsed log + errors
+      ConfigPanel.tsx                # engine toggle (temporal/fast), grid, scenario + steps/frame_interval/outflow_fraction, Stop
+      FloodMap.tsx                    # Temporal/Fast/Compare view selector; Compare = two synced MapPanes side by side; shared legend
+      MapPane.tsx                      # one plain Leaflet map: OSM tiles + L.ImageOverlay via API bounds, ResizeObserver-aware
+      DepthLegend.tsx                   # depth -> color key with numeric ranges, read from DEPTH_BANDS
+      LogPanel.tsx                     # status/grid_shape/bounds, temporal-vs-fast comparison block, scrolling log, errors
 ```
 
 `data/raw/` and `data/processed/` now hold real (gitignored) files once `download_dem.py`/
@@ -851,9 +997,9 @@ they'd cost and whether they touch the TCC's documented model:
 - Click-to-place seed location on the map, instead of always seeding at the terrain's lowest point
   (`seed_pool_at_lowest_point` in `simulation/engine.py`) — needs a small API addition to accept a
   start coordinate, but no change to the transition rule itself.
-- Visual polish: better depth→color ramp/legend (current one is a quick orange-red fix for
-  visibility, not a designed palette), smoother frame-to-frame transitions, terrain shading under
-  the flood overlay, general UI/layout polish.
+- Visual polish: ~~better depth→color ramp/legend~~ *(done — fixed 6-band blue scale with a numeric
+  legend, see "Frontend visual polish" in Current status)*; still open: smoother frame-to-frame
+  transitions, terrain shading under the flood overlay.
 - Timeline scrubber: buffer received frames client-side (`{step, depth, volume}` per frame already
   has everything needed) and add a slider to re-render any past frame instead of only ever showing
   the live one. Fully independent of every other item here — buildable against what already exists

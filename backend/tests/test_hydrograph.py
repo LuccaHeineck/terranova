@@ -115,6 +115,18 @@ def test_hydrograph_discharge_at_raises_outside_recorded_range():
         hydrograph.discharge_at(1000.0)
 
 
+def test_hydrograph_peak_is_first_maximum_of_discharge():
+    # A plateau at the peak (the real record reads 33.66m twice) resolves to
+    # its first sample, matching np.argmax over the stage series.
+    hydrograph = Hydrograph(
+        elapsed_seconds=np.array([0.0, 900.0, 1800.0, 2700.0]),
+        discharge_m3s=np.array([100.0, 300.0, 300.0, 200.0]),
+    )
+
+    assert hydrograph.peak_elapsed_seconds == pytest.approx(900.0)
+    assert hydrograph.peak_discharge_m3s == pytest.approx(300.0)
+
+
 def test_find_boundary_inflow_mask_locates_channel_on_given_edge():
     # A 5x5 synthetic terrain: the north edge has a clear low notch (the channel)
     # at columns 2-3, everywhere else is much higher.

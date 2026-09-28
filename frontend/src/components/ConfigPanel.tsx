@@ -1,124 +1,207 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import type { SimulationParams } from '../types/simulation'
-import type { SimulationStatus } from '../hooks/useSimulationRun'
+import type { Resolution, SimulationParams } from '../types/simulation'
+import type { Engine, SimulationStatus } from '../hooks/useSimulationRun'
 
 interface ConfigPanelProps {
   status: SimulationStatus
   onStart: (params: SimulationParams) => void
+  onStop: () => void
 }
+
+type TemporalScenario = 'seeded_pool' | 'gauge_driven'
 
 // A seeded-pool run is a few hundred steps, so a frame every 5 is fine. A
 // gauge-driven run covers the whole real May 2024 event in 100k+ engine steps -
 // at an interval of 5 that would be tens of thousands of WebSocket frames, so it
 // defaults far coarser. Switching modes resets the field to that mode's default;
 // the user can still type any value afterwards.
-const DEFAULT_FRAME_INTERVAL: Record<'seeded_pool' | 'gauge_driven', number> = {
+const DEFAULT_FRAME_INTERVAL: Record<TemporalScenario, number> = {
   seeded_pool: 5,
   gauge_driven: 500,
 }
 
-export function ConfigPanel({ status, onStart }: ConfigPanelProps) {
-  const [mode, setMode] = useState<'seeded_pool' | 'gauge_driven'>('seeded_pool')
+const inputClass = 'rounded border border-gray-300 px-2 py-1 disabled:opacity-50'
+
+export function ConfigPanel({ status, onStart, onStop }: ConfigPanelProps) {
+  const [engine, setEngine] = useState<Engine>('temporal')
+  const [scenario, setScenario] = useState<TemporalScenario>('seeded_pool')
+  const [resolution, setResolution] = useState<Resolution>(30)
   const [steps, setSteps] = useState(200)
   const [frameInterval, setFrameInterval] = useState(DEFAULT_FRAME_INTERVAL.seeded_pool)
   // Mirrors the backend's DEFAULT_OUTFLOW_FRACTION (simulation/engine.py) - keep in sync by hand.
   const [outflowFraction, setOutflowFraction] = useState(0.085)
+  // On by default: the observed peak is the moment the fast mode models and the
+  // real flood extent was mapped at. Off runs the whole ~14-day record.
+  const [stopAtPeak, setStopAtPeak] = useState(true)
 
   const busy = status === 'starting' || status === 'streaming'
 
-  const selectMode = (next: 'seeded_pool' | 'gauge_driven') => {
-    setMode(next)
+  const selectScenario = (next: TemporalScenario) => {
+    setScenario(next)
     setFrameInterval(DEFAULT_FRAME_INTERVAL[next])
   }
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault()
-    const params: SimulationParams = {
-      mode,
+    if (engine === 'fast') {
+      onStart({ mode: 'fast', resolution })
+      return
+    }
+    onStart({
+      mode: scenario,
+      resolution,
       frame_interval: frameInterval,
       outflow_fraction: outflowFraction,
-      ...(mode === 'seeded_pool' ? { steps } : {}),
-    }
-    onStart(params)
+      ...(scenario === 'seeded_pool' ? { steps } : { stop_at_peak: stopAtPeak }),
+    })
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex h-full flex-col gap-4 border-r border-gray-200 bg-gray-50 p-4">
+    <form onSubmit={handleSubmit} className="flex h-full flex-col gap-4 overflow-y-auto border-r border-gray-200 bg-gray-50 p-4">
       <h1 className="text-lg font-semibold text-gray-900">Terranova</h1>
       <p className="text-sm text-gray-500">Vale do Taquari flood simulation</p>
 
       <fieldset className="flex flex-col gap-1 text-sm text-gray-700">
-        <legend className="mb-1">Run mode</legend>
+        <legend className="mb-1 font-medium">Engine</legend>
         <label className="flex items-center gap-2">
           <input
             type="radio"
-            name="mode"
-            checked={mode === 'seeded_pool'}
+            name="engine"
+            checked={engine === 'temporal'}
             disabled={busy}
-            onChange={() => selectMode('seeded_pool')}
+            onChange={() => setEngine('temporal')}
           />
-          Synthetic seeded pool
+          Temporal CA (time-stepped)
         </label>
         <label className="flex items-center gap-2">
           <input
             type="radio"
-            name="mode"
-            checked={mode === 'gauge_driven'}
+            name="engine"
+            checked={engine === 'fast'}
             disabled={busy}
-            onChange={() => selectMode('gauge_driven')}
+            onChange={() => setEngine('fast')}
           />
-          Real May 2024 event (gauge-driven)
+          Fast (non-temporal)
         </label>
       </fieldset>
 
-      {mode === 'seeded_pool' && (
-        <label className="flex flex-col gap-1 text-sm text-gray-700">
-          Steps
-          <input
-            type="number"
-            min={1}
-            value={steps}
-            disabled={busy}
-            onChange={(e) => setSteps(Number(e.target.value))}
-            className="rounded border border-gray-300 px-2 py-1 disabled:opacity-50"
-          />
-        </label>
+      <label className="flex flex-col gap-1 text-sm text-gray-700">
+        Grid
+        <select
+          value={resolution}
+          disabled={busy}
+          onChange={(e) => setResolution(Number(e.target.value) as Resolution)}
+          className={inputClass}
+        >
+          <option value={30}>30 m (live grid)</option>
+          <option value={90}>90 m (validation grid)</option>
+        </select>
+      </label>
+
+      {engine === 'fast' ? (
+        <p className="text-sm text-gray-600">
+          Real May 2024 event: one steady classification at the observed peak discharge. No time steps, so there is
+          no frame interval or outflow fraction.
+        </p>
+      ) : (
+        <>
+          <fieldset className="flex flex-col gap-1 text-sm text-gray-700">
+            <legend className="mb-1 font-medium">Scenario</legend>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="scenario"
+                checked={scenario === 'seeded_pool'}
+                disabled={busy}
+                onChange={() => selectScenario('seeded_pool')}
+              />
+              Synthetic seeded pool
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="scenario"
+                checked={scenario === 'gauge_driven'}
+                disabled={busy}
+                onChange={() => selectScenario('gauge_driven')}
+              />
+              Real May 2024 event (gauge-driven)
+            </label>
+          </fieldset>
+
+          {scenario === 'seeded_pool' ? (
+            <label className="flex flex-col gap-1 text-sm text-gray-700">
+              Steps
+              <input
+                type="number"
+                min={1}
+                value={steps}
+                disabled={busy}
+                onChange={(e) => setSteps(Number(e.target.value))}
+                className={inputClass}
+              />
+            </label>
+          ) : (
+            <label className="flex items-center gap-2 text-sm text-gray-700">
+              <input
+                type="checkbox"
+                checked={stopAtPeak}
+                disabled={busy}
+                onChange={(e) => setStopAtPeak(e.target.checked)}
+              />
+              Stop at the observed peak
+            </label>
+          )}
+
+          <label className="flex flex-col gap-1 text-sm text-gray-700">
+            Frame interval
+            <input
+              type="number"
+              min={1}
+              value={frameInterval}
+              disabled={busy}
+              onChange={(e) => setFrameInterval(Number(e.target.value))}
+              className={inputClass}
+            />
+          </label>
+
+          <label className="flex flex-col gap-1 text-sm text-gray-700">
+            Outflow fraction
+            <input
+              type="number"
+              min={0.01}
+              max={1}
+              step={0.005}
+              value={outflowFraction}
+              disabled={busy}
+              onChange={(e) => setOutflowFraction(Number(e.target.value))}
+              className={inputClass}
+            />
+          </label>
+        </>
       )}
 
-      <label className="flex flex-col gap-1 text-sm text-gray-700">
-        Frame interval
-        <input
-          type="number"
-          min={1}
-          value={frameInterval}
-          disabled={busy}
-          onChange={(e) => setFrameInterval(Number(e.target.value))}
-          className="rounded border border-gray-300 px-2 py-1 disabled:opacity-50"
-        />
-      </label>
-
-      <label className="flex flex-col gap-1 text-sm text-gray-700">
-        Outflow fraction
-        <input
-          type="number"
-          min={0.01}
-          max={1}
-          step={0.005}
-          value={outflowFraction}
-          disabled={busy}
-          onChange={(e) => setOutflowFraction(Number(e.target.value))}
-          className="rounded border border-gray-300 px-2 py-1 disabled:opacity-50"
-        />
-      </label>
-
-      <button
-        type="submit"
-        disabled={busy}
-        className="mt-2 rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-      >
-        {busy ? 'Running…' : 'Start simulation'}
-      </button>
+      {/* Distinct keys: if React reused one <button> and flipped its type from "button" to "submit"
+          during the Stop click, the click's default action would submit the form and start a new run. */}
+      {busy ? (
+        <button
+          key="stop"
+          type="button"
+          onClick={onStop}
+          className="mt-2 rounded bg-gray-700 px-3 py-2 text-sm font-medium text-white hover:bg-gray-800"
+        >
+          Stop
+        </button>
+      ) : (
+        <button
+          key="start"
+          type="submit"
+          className="mt-2 rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
+        >
+          Start simulation
+        </button>
+      )}
     </form>
   )
 }

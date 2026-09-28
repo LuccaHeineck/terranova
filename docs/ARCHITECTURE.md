@@ -112,11 +112,17 @@ for file paths. Called by `api/` (and later `scripts/` for offline preprocessing
 ### `backend/api/` — orchestration + network boundary (has code since step 5)
 
 What belongs here: the FastAPI app — `POST /simulations` to validate parameters and register a run,
-`WS /simulations/{run_id}/stream` to run it and stream a JSON frame (`{step, depth, volume}`) every
-`frame_interval` steps. `state.py` holds the currently loaded `Z`/`N` arrays (built once at startup via
-a `lifespan`, not per-request), exposed as FastAPI dependencies rather than read directly off `app.state`
-so tests can swap in small synthetic arrays via `app.dependency_overrides`. Serves the real
-Lajeado/Estrela grid only — no synthetic-grid option, since `api/` may never import `examples/`.
+`WS /simulations/{run_id}/stream` to run it and stream JSON frames (`{step, depth, volume, ...}`), then
+`{done: true}`. Three modes: `seeded_pool` and `gauge_driven` (temporal engine, a frame every
+`frame_interval` steps; `gauge_driven` can `stop_at_peak`) and `fast` (`simulation/fast_engine.py`, exactly
+one frame, `step: 0`, since it has no time steps - `docs/tcc-deviations.md` §21 explains why this is a mode
+of the same contract rather than a separate REST endpoint). `state.py` holds one `Grid` bundle per served
+resolution (`Z`, `N`, `dx`, bounds, inflow mask, outlet overrides — the live 30m grid and the 90m
+validation grid, chosen per run with `resolution`) plus the best-effort hydrograph, all built once at
+startup via a `lifespan`, not per-request, and exposed as FastAPI dependencies (`get_grids`,
+`get_hydrograph`) rather than read directly off `app.state` so tests can swap in small synthetic arrays via
+`app.dependency_overrides`. Serves the real Lajeado/Estrela grid only — no synthetic-grid option, since
+`api/` may never import `examples/`.
 
 What does NOT belong here: any CA math (delegates to `simulation/`), any raster parsing (delegates to
 `ingestion/`).
@@ -190,7 +196,11 @@ for ground truth.
 
 ### `frontend/` — the UI (empty stub, filled starting step 6)
 
-What belongs here: the React + Vite + Leaflet app — map rendering, config panel, live log/metrics panel.
+What belongs here: the React + Vite + Leaflet app — map rendering, config panel (engine toggle: temporal /
+fast), live log/metrics panel. `useSimulationRun` keeps the latest result of each engine as a separate
+layer so a fast result and a gauge-driven temporal result on the same grid can be compared on the map
+(Temporal / Fast / Compare views); a layer that no longer describes the same scenario and grid is cleared
+when the next run starts.
 
 What does NOT belong here: any backend logic. The frontend only ever calls `backend/api/`'s HTTP/WebSocket
 contract; it never imports Python code or reads `data/` directly.

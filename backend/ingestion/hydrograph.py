@@ -154,6 +154,18 @@ class Hydrograph:
     def duration_seconds(self) -> float:
         return float(self.elapsed_seconds[-1])
 
+    # The peak is the discharge series' first maximum. build_hydrograph derives
+    # discharge from stage through a monotone rating curve, so this is the same
+    # sample as the stage series' argmax (the real observed peak stage) that
+    # examples/validate_may2024.py and examples/fast_mode_may2024.py use.
+    @property
+    def peak_elapsed_seconds(self) -> float:
+        return float(self.elapsed_seconds[int(np.argmax(self.discharge_m3s))])
+
+    @property
+    def peak_discharge_m3s(self) -> float:
+        return float(np.max(self.discharge_m3s))
+
     def discharge_at(self, elapsed_seconds: float) -> float:
         if not (0 <= elapsed_seconds <= self.duration_seconds):
             raise ValueError(

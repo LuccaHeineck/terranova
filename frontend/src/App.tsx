@@ -7,10 +7,17 @@ export default function App() {
   const run = useSimulationRun()
 
   return (
-    <div className="grid h-screen grid-cols-[280px_1fr_320px]">
-      <ConfigPanel status={run.status} onStart={run.start} />
-      <FloodMap bounds={run.bounds} frame={run.latestFrame} />
-      <LogPanel status={run.status} gridShape={run.gridShape} bounds={run.bounds} log={run.log} error={run.error} />
+    <div className="grid h-screen grid-cols-[280px_1fr_320px] grid-rows-1 overflow-hidden">
+      <ConfigPanel status={run.status} onStart={run.start} onStop={run.stop} />
+      <FloodMap bounds={run.bounds} layers={run.layers} activeEngine={run.activeEngine} runCount={run.runCount} />
+      <LogPanel
+        status={run.status}
+        gridShape={run.gridShape}
+        bounds={run.bounds}
+        layers={run.layers}
+        log={run.log}
+        error={run.error}
+      />
     </div>
   )
 }
