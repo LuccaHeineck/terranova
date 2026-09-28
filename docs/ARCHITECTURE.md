@@ -64,7 +64,10 @@ What belongs here: the CA transition rule itself — pure functions over NumPy a
 roughness). Currently just `engine.py`, exposing `step(Z, H, N, outflow_fraction=DEFAULT_OUTFLOW_FRACTION)` (0.085) and
 `compute_stable_dt(Z, H, N, dx, courant_number=1.0)` (step 8 — derives a real elapsed timestep from
 Manning flow velocities under a CFL condition; `dx` is passed in by the caller, never imported from
-`config/`, keeping this module dependency-free).
+`config/`, keeping this module dependency-free). Alongside it, `fast_engine.py` is the second,
+non-temporal engine of the hybrid architecture: `classify_steady_flood(Z, N, dx, peak_discharge_m3s,
+inflow_mask, ...)`, a Torres-inspired steady classification (`docs/tcc-deviations.md` §19). The two
+engines are deliberately independent — neither imports the other.
 
 What does NOT belong here: file I/O, geodata parsing, HTTP/WebSocket code, configuration loading,
 plotting. `simulation/` must stay dependency-free — no imports from `ingestion/`, `api/`, or `config/` —

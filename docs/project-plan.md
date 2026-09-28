@@ -677,6 +677,28 @@ numpy|cupy`, `--max-steps`, `--assert-every`), which reproduces every number her
 - Recommendation: not worth a full migration as-is; the next GPU experiment is a fused single-kernel
   substep that removes the launch overhead. Full write-up: `docs/tcc-deviations.md` §18.
 
+**Hybrid architecture: Torres-inspired non-temporal fast mode, first pass (§17 implemented offline).**
+`backend/simulation/fast_engine.py` (new, dependency-free, independent of `engine.py`) classifies a steady
+flood extent in one top-down, elevation-ordered routing pass plus one lateral pass. There is no `dt` or
+CFL. The approach is *inspired by* Torres et al. (2022), not reproduced: their state rules are paywalled,
+so the four states (DRY / CONVEYING / INUNDATED / EXITING) are this project's own design.
+- **Forcing:** the real peak discharge, 23,472 m³/s.
+- **Depth:** Manning normal depth for conveying cells, plus HAND-style lateral backwater.
+- **Routing surface:** re-filled from the real outlet only. The first attempt retained all flow
+  against the walls; see §19.
+- **Result** (`backend/examples/fast_mode_may2024.py`, same 90m grid / reference / Estrela-gap
+  correction as §16): **gap-corrected CSI 0.53 in ~74 ms**, against the temporal engine's **0.90 in
+  7.6 min**. That is about 6,000× faster, at clearly lower accuracy: hit rate 0.88 vs 0.95, but 547 vs 46
+  real false positives.
+- **Caveat:** an untuned slope floor (`_MIN_SLOPE`) effectively sets the channel depth. The disclosed
+  sweep gives 0.49–0.76 gap-only CSI. Calibrating it à la §16.3 is the follow-up.
+- **Tests:** `backend/tests/test_fast_engine.py` has 14 tests: continuity, hand-computed Manning depth,
+  roughness split, the four states, monotonicity, flats, depressions, validation, and a May 2024
+  regression. The regression is the suite's first data-dependent test; it is skipped when the raw data
+  is absent. Suite: 98/98 passing.
+- No API or frontend changes; wiring the mode in is a deliberate next step. Full write-up:
+  `docs/tcc-deviations.md` §19.
+
 To run the CA-engine PoC directly (bare-metal, unrelated to Docker): `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 
 To run the real end-to-end CSI validation against the May 2024 event (bare-metal, expect ~30 minutes):
@@ -689,6 +711,10 @@ metrics/masks/depth visualization for later reuse — all five default to today'
 behavior when omitted. `examples/shift_search_noise_floor.py --npz PATH` and
 `examples/plot_confusion_map.py --npz PATH --out PATH.png` (both new) consume a `--save-masks` `.npz`
 for the registration-shift noise-floor check and the terrain/depth/confusion visualization respectively.
+
+To run the Torres-inspired fast mode against the same event (seconds, not minutes):
+`cd backend && .venv/bin/python -m examples.fast_mode_may2024` (same raw files; the Estrela-gap
+correction queries SGB live - add `--skip-gap-correction` to run offline with naive scoring only).
 
 To run the full containerized stack: `docker compose up --build` from the repo root, then open `http://localhost:5173`.
 
@@ -704,11 +730,13 @@ backend/
   simulation/
     __init__.py
     engine.py         # core CA step, compute_stable_dt, seed_pool_at_lowest_point — pure NumPy, no I/O
+    fast_engine.py     # Torres-inspired non-temporal fast mode: classify_steady_flood (hybrid architecture, §19)
   examples/
     __init__.py
     poc_grid.py        # small artificial-grid demo: fake terrain, pool of water, run N steps, plot/check
     poc_real_dem.py     # same idea, on the real Lajeado/Estrela elevation matrix (step 3), + real dt (step 8)
     validate_may2024.py  # real end-to-end CSI run: gauge-driven engine to the real peak vs. real SGB ground truth (step 10)
+    fast_mode_may2024.py  # same event/grid/scoring for the non-temporal fast mode, vs. the temporal engine (§19)
   api/
     __init__.py
     main.py             # FastAPI() app, lifespan loads Z/N/bounds/hydrograph (best-effort), includes routers
@@ -743,6 +771,7 @@ backend/
     test_hydrograph.py
     test_flood_extent.py
     test_metrics.py
+    test_fast_engine.py
     test_api.py
 frontend/
   package.json        # react, react-dom, leaflet, tailwindcss/@tailwindcss/vite (npm, TypeScript, Vite)

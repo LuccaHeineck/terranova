@@ -760,7 +760,8 @@ elevation-ordered classification), documenting the speed/accuracy trade-off betw
 replacing the temporal model with the faster one.
 
 **Status**: design-stage only. Not implemented, not yet assigned to a specific roadmap step — noted here
-as planned future work so it isn't lost between sessions.
+as planned future work so it isn't lost between sessions. *(Since implemented, first pass: the
+Torres-inspired non-temporal mode is `simulation/fast_engine.py` - see §19 for its first real result.)*
 
 ---
 
@@ -837,6 +838,102 @@ A naive NumPy -> CuPy array swap adds nothing at 90m and ~2x at 30m, which does 
 migration or live-API integration as-is. The GPU follow-up worth trying is a fused single-kernel substep
 (one CuPy `ElementwiseKernel`/`RawKernel` per pass), which targets the launch overhead that dominates
 here. It is relevant only at 30m or finer.
+
+---
+
+## 19. Torres-inspired non-temporal fast mode — first result (hybrid architecture, §17)
+
+**TCC1:** the literature review cites Torres et al. (2022) as the closest methodological match and
+frames this project's time-stepped engine as that approach "extended to be time-stepped" (see
+`docs/tcc-summary.md`). §17 decided to build the non-temporal counterpart as well, as a second,
+explicitly separate mode, so the speed/accuracy trade-off between the two could be measured rather
+than asserted. This section is that measurement.
+
+**Inspiration, not a reproduction.** The general approach follows Torres, Chávez-Cifuentes & Reinoso
+(2022), "A conceptual flood model based on cellular automata for probabilistic risk applications",
+*Environmental Modelling & Software* 157:105530. Its public abstract describes a top-down evaluation of
+flow through DEM cells under a Moore neighbourhood, with cells classified into four dynamic states, each
+with its own rule. The paper's own state definitions and rules are behind a paywall and were not
+available, so the rule set below is this project's own design, consistent with that description. It is
+labelled "Torres-inspired" everywhere. **No numerical comparison with Torres et al.'s reported results is
+made anywhere**: the comparison is against this project's own temporal engine on the same real data.
+
+**Design** (`backend/simulation/fast_engine.py`, `classify_steady_flood`). Dependency-free like
+`engine.py`, and imports nothing from it.
+- **Forcing: steady peak discharge.** It uses the real hydrograph's discharge at the observed peak,
+  23,472 m³/s, the same value the temporal engine injects at that moment. There is no `dt`, no CFL and
+  no time integration. A total volume would not work as the forcing: the domain has a real outlet, so a
+  volume routed downhill simply drains out. Conveyance is what sets extent for a through-flowing river.
+- **Outlet-conditioned routing surface.** The first implementation retained 100% of the discharge after
+  10 cells. `ingestion/dem.py`'s sink filling guarantees a non-ascending path to *some* border cell,
+  but the domain is walled everywhere except the outlet, so the river's own path dead-ended.
+  - Fix: route over a surface re-filled by a priority-flood (Barnes et al. 2014, the step-3 algorithm)
+    seeded from the outlet cells only. At steady state under continuous inflow, a depression on the
+    flow path is full to its spill level.
+  - Routing follows the flood's own visitation order reversed: top-down, from the cells farthest from
+    the outlet. Every reachable cell therefore provably has a downstream path out.
+- **Routing pass.** Each cell splits its discharge among downstream Moore neighbours by `sqrt(S)/n_dest`,
+  the same weighting and convention as `engine._single_update`.
+- **Four states:**
+  - **CONVEYING:** carries routed discharge. Its water surface is the conditioned elevation plus the
+    Manning normal depth `h = (Q·n/(w·√S))^(3/5)`, with `w = dx`, as in `compute_stable_dt`.
+  - **EXITING:** a conveying cell that discharges through the outlet.
+  - **INUNDATED:** carries no flow, but its terrain is below the water surface of the conveying cell its
+    steepest-descent path first reaches. This is a HAND-style lateral backwater rule.
+  - **DRY:** everything else.
+- **Invariant:** discharge continuity, `outflow + retained == inflow`, is this mode's analogue of mass
+  conservation. On the real grid it holds exactly: 23,472.370 m³/s out, 0 retained.
+- **Slope floor.** Slope is floored at `_MIN_SLOPE = 1e-4`, the order of large lowland river bed
+  slopes, because the conditioned surface has flats where Manning depth would diverge.
+
+**Result** (90m, May 2024 observed peak, `examples/fast_mode_may2024.py`). Temporal figures are §16.4 and
+§18 at `outflow_fraction=0.085`:
+
+| | fast (Torres-inspired) | temporal |
+|---|---|---|
+| naive TP / FP / FN | 731 / 2,109 / 100 | 789 / 1,167 / 42 |
+| naive CSI | 0.249 | 0.395 |
+| **Estrela-gap-only CSI** (§16.2 correction) | **0.531** | **0.900** |
+| gap-only Hit Rate / FAR | 0.880 / 0.428 | 0.949 / 0.056 |
+| gap-only FP | 547 | 46 |
+| **wall-clock to a final extent** | **~74 ms** (median of 20) | **7.6 min** (§18) |
+
+**About 6,000× faster, at a clearly lower accuracy.** Hit rate is only slightly lower (0.88 vs 0.95):
+the fast mode finds most of the real floodplain. The gap is almost entirely over-prediction: 547 real
+false positives against the temporal engine's 46. A visual check of the depth and state maps shows a
+coherent result: the conveying path traces the real channel from the north inflow to a single exiting
+cell at the south outlet, with no speckle or artifacts. The errors have a physically interpretable
+pattern:
+- **Upstream over-prediction.** Up a north-western side valley, the lateral rule carries the
+  high upstream water surface onto high ground. Only the ~106 conveying cells carry the discharge,
+  while the real floodplain conveys too, so the steady Manning depth there is too high.
+- **Downstream under-prediction.** The 100 false negatives are near the outlet. The real flood there
+  is backwater-controlled from downstream, which a local, steady Manning rule cannot represent. This is
+  exactly the "dynamic effects" regime where Torres et al.'s own abstract says conceptual models are
+  weakest.
+
+**Disclosed sensitivity: the slope floor dominates the result.** 103 of the ~106 conveying cells sit
+on the `_MIN_SLOPE` floor, because the conditioned river path is almost entirely flat at 90m. So that
+constant effectively sets the channel depth. It was fixed on physical grounds before seeing any score
+and was not tuned. A one-off sweep, for disclosure only (hit rate stays 0.84–0.88 throughout; the floor
+controls over-prediction):
+
+| `_MIN_SLOPE` | 3e-5 | **1e-4 (used)** | 3e-4 | 1e-3 |
+|---|---|---|---|---|
+| gap-only CSI | 0.486 | **0.530** | 0.633 | 0.760 |
+| flooded cells | 3,102 | 2,840 | 2,387 | 1,840 |
+
+**Conclusion.** The hybrid architecture's premise holds for speed: this mode reaches a final extent in
+under a tenth of a second on the 90m grid, which fits the "seconds, not hours" class TCC1 cites. On
+accuracy it is a real step down from the calibrated temporal engine (0.53 vs 0.90 gap-corrected), for
+two reasons: no backwater or dynamics, and a channel depth governed by an uncalibrated slope floor. That
+fits the architecture's framing: a fast screening mode alongside the validated temporal model, not a
+replacement.
+
+The natural follow-up is to calibrate `_MIN_SLOPE` (or a floodplain-conveyance width in its place)
+the way §16.3 calibrated `outflow_fraction`, using a sweep plus the §15/§16 noise-floor check. It was
+deliberately not done here, so this first number stays uncalibrated and comparable. Regression-pinned
+in `tests/test_fast_engine.py` (naive TP/FP/FN 731/2,109/100).
 
 ---
 
