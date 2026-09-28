@@ -14,7 +14,9 @@ export interface DepthBand {
 }
 
 /**
- * The depth color scale, shared by the temporal and fast overlays and the map legend.
+ * The depth color scale of the temporal overlay and its map legend. The fast overlay does not use it: the
+ * fast mode's steady Manning depth is not calibrated (median ~33 m against a ~20 m river rise -
+ * docs/tcc-deviations.md section 19), so it draws its extent in one flat color instead (FAST_EXTENT_COLOR).
  *
  * Fixed bands for this ROI rather than a scale derived from the data, because:
  * - A running max over the run's frames gets captured by the gauge-driven first-step spike. Step 1 pushes
@@ -23,13 +25,11 @@ export interface DepthBand {
  *   uniformly faint, for the rest of the run.
  * - A per-frame percentile would rescale every frame. An early, shallow frame would look as deep as the
  *   peak, and the legend's numbers would change under the viewer.
- * - The temporal and fast overlays have to share one scale for their colors to be comparable.
  * The top band opens at 20 m: the May 2024 event's stage rise (~14 m -> 33.66 m at the gauge), and between the
  * 90th and 95th percentile of wet-cell depth (17.7 m / 22.7 m) at the peak of a real temporal run on the 90m
  * grid. Before the flood wave arrives the same run sits at p99 ~13.5 m (median ~4 m), so the lower bands
- * carry the early frames and the scale still shows depth structure all the way to the peak. Deeper cells take
- * the top color: the inflow spike, and most of the fast mode's extent, whose steady Manning depth is known to
- * be too high (median ~33 m - docs/tcc-deviations.md section 19).
+ * carry the early frames and the scale still shows depth structure all the way to the peak. Deeper cells (the
+ * gauge-driven inflow spike) take the top color.
  *
  * Colors: one blue hue, lightness stepping down evenly in OKLCH (0.64 -> 0.30). The lightest band still
  * clears 2:1 contrast against OSM's own light-blue water (#aad3df) - a lighter blue overlay disappears
@@ -48,7 +48,24 @@ export const DEPTH_BANDS: readonly DepthBand[] = [
 /** Opacity of the flood overlay; the legend swatches use the same value so they match the map. */
 export const OVERLAY_OPACITY = 0.8
 
-const BAND_RGB = DEPTH_BANDS.map(({ color }) => [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16)))
+/**
+ * The fast overlay's single "flooded" color: extent only, since its depth is not calibrated (see DEPTH_BANDS).
+ * Burnt orange, checked with the dataviz skill's palette validator and composited at OVERLAY_OPACITY:
+ * - against OSM: 3.37:1 on land (#f2efe9) and 2.71:1 on water (#aad3df), above the ramp's own 2.12:1 floor
+ *   on water; opaque, >= 3:1 on land, water, residential and forest;
+ * - against the blue ramp, for the two Compare panes: OKLab dE >= 32 to every band, and >= 22 under
+ *   simulated protan/deutan/tritan vision (target >= 8). Another blue or a purple would read as "a depth".
+ */
+export const FAST_EXTENT_COLOR = '#c2410c'
+
+type Rgb = [number, number, number]
+
+function hexToRgb(color: string): Rgb {
+  return [1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16)) as Rgb
+}
+
+const BAND_RGB = DEPTH_BANDS.map(({ color }) => hexToRgb(color))
+const FAST_EXTENT_RGB = hexToRgb(FAST_EXTENT_COLOR)
 
 function bandIndex(d: number): number {
   let i = 0
@@ -56,8 +73,18 @@ function bandIndex(d: number): number {
   return i
 }
 
-/** Rasterizes a depth grid to a data URL: dry cells are transparent, wet ones take their band's color. */
+/** Temporal overlay: each wet cell takes its depth band's color. */
 export function depthToImageDataUrl(depth: number[][]): string {
+  return rasterize(depth, (d) => BAND_RGB[bandIndex(d)])
+}
+
+/** Fast overlay: every wet cell takes FAST_EXTENT_COLOR - extent only, no depth. */
+export function extentToImageDataUrl(depth: number[][]): string {
+  return rasterize(depth, () => FAST_EXTENT_RGB)
+}
+
+/** Rasterizes a depth grid to a data URL: dry cells are transparent, wet ones take `colorOf(depth)`. */
+function rasterize(depth: number[][], colorOf: (d: number) => Rgb): string {
   const rows = depth.length
   const cols = depth[0]?.length ?? 0
   const canvas = document.createElement('canvas')
@@ -74,7 +101,7 @@ export function depthToImageDataUrl(depth: number[][]): string {
         image.data[i + 3] = 0
         continue
       }
-      const [red, green, blue] = BAND_RGB[bandIndex(d)]
+      const [red, green, blue] = colorOf(d)
       image.data[i] = red
       image.data[i + 1] = green
       image.data[i + 2] = blue

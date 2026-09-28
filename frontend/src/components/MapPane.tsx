@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import type { ReactNode } from 'react'
 import L from 'leaflet'
 import type { Bounds } from '../types/simulation'
 import { OVERLAY_OPACITY } from '../rendering/depthToImage'
@@ -9,6 +10,8 @@ interface MapPaneProps {
   imageUrl: string | null
   /** Engine name drawn over the pane, for the two-pane Compare view. */
   label?: string
+  /** Key for this pane's overlay, drawn in its bottom-left corner. */
+  legend?: ReactNode
   /** Fit the view to `bounds` on mount. Off for a pane whose view is copied from another map instead. */
   fitOnMount?: boolean
   /** Called with the Leaflet map once created, and with null just before it is removed. */
@@ -24,7 +27,7 @@ function toLatLngBounds(bounds: Bounds): L.LatLngBounds {
 }
 
 /** One Leaflet map: OSM basemap plus a single flood overlay image stretched over the grid's bounds. */
-export function MapPane({ bounds, imageUrl, label, fitOnMount = true, onMapReady }: MapPaneProps) {
+export function MapPane({ bounds, imageUrl, label, legend, fitOnMount = true, onMapReady }: MapPaneProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<L.Map | null>(null)
   const overlayRef = useRef<L.ImageOverlay | null>(null)
@@ -99,6 +102,7 @@ export function MapPane({ bounds, imageUrl, label, fitOnMount = true, onMapReady
           {label}
         </div>
       )}
+      {legend && <div className="absolute bottom-6 left-3 z-1000">{legend}</div>}
     </div>
   )
 }

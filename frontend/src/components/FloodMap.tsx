@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import L from 'leaflet'
 import type { Bounds } from '../types/simulation'
 import type { Engine, ResultLayer, ResultLayers } from '../hooks/useSimulationRun'
-import { depthToImageDataUrl } from '../rendering/depthToImage'
+import { depthToImageDataUrl, extentToImageDataUrl } from '../rendering/depthToImage'
 import { DepthLegend } from './DepthLegend'
+import { ExtentLegend } from './ExtentLegend'
 import { MapPane } from './MapPane'
 
 type MapView = Engine | 'compare'
@@ -31,15 +33,26 @@ function resolveView(view: MapView, layers: ResultLayers): MapView | null {
 }
 
 function paneLabel(engine: Engine, layer: ResultLayer | null): string {
-  if (engine === 'fast') return 'Fast: steady peak'
+  if (engine === 'fast') return 'Fast: steady peak extent'
   const hours = (layer?.frame?.elapsed_time ?? 0) / 3600
   return `Temporal CA: t = ${hours.toFixed(1)} h`
 }
 
+// The temporal overlay is shaded by depth; the fast one shows extent only, since its depths are not calibrated.
+const RENDER: Record<Engine, (depth: number[][]) => string> = {
+  temporal: depthToImageDataUrl,
+  fast: extentToImageDataUrl,
+}
+
+const LEGEND: Record<Engine, ReactNode> = {
+  temporal: <DepthLegend />,
+  fast: <ExtentLegend />,
+}
+
 /** Rasterized overlay for one engine's latest frame, recomputed only when that frame changes. */
-function useOverlayUrl(layer: ResultLayer | null, needed: boolean): string | null {
+function useOverlayUrl(engine: Engine, layer: ResultLayer | null, needed: boolean): string | null {
   const frame = layer?.frame
-  return useMemo(() => (needed && frame ? depthToImageDataUrl(frame.depth) : null), [needed, frame])
+  return useMemo(() => (needed && frame ? RENDER[engine](frame.depth) : null), [engine, needed, frame])
 }
 
 /**
@@ -101,8 +114,10 @@ export function FloodMap({ bounds, layers, activeEngine, runCount }: FloodMapPro
   const shown = resolveView(view, layers)
   const compare = shown === 'compare'
 
-  const temporalUrl = useOverlayUrl(layers.temporal, shown === 'temporal' || compare)
-  const fastUrl = useOverlayUrl(layers.fast, shown === 'fast' || compare)
+  const temporalUrl = useOverlayUrl('temporal', layers.temporal, shown === 'temporal' || compare)
+  const fastUrl = useOverlayUrl('fast', layers.fast, shown === 'fast' || compare)
+  // The primary pane shows the temporal result, or the fast one when that's the only view.
+  const primary: Engine = shown === 'fast' ? 'fast' : 'temporal'
   const { onPrimaryReady, onSecondaryReady } = useSyncedMaps(bounds)
 
   const available: Record<MapView, boolean> = {
@@ -117,8 +132,9 @@ export function FloodMap({ bounds, layers, activeEngine, runCount }: FloodMapPro
       <div className={`grid h-full w-full ${compare ? 'grid-cols-2 gap-0.5 bg-gray-400' : 'grid-cols-1'}`}>
         <MapPane
           bounds={bounds}
-          imageUrl={shown === 'fast' ? fastUrl : temporalUrl}
+          imageUrl={primary === 'fast' ? fastUrl : temporalUrl}
           label={compare ? paneLabel('temporal', layers.temporal) : undefined}
+          legend={shown ? LEGEND[primary] : undefined}
           onMapReady={onPrimaryReady}
         />
         {compare && (
@@ -126,6 +142,7 @@ export function FloodMap({ bounds, layers, activeEngine, runCount }: FloodMapPro
             bounds={bounds}
             imageUrl={fastUrl}
             label={paneLabel('fast', layers.fast)}
+            legend={LEGEND.fast}
             fitOnMount={false}
             onMapReady={onSecondaryReady}
           />
@@ -151,15 +168,9 @@ export function FloodMap({ bounds, layers, activeEngine, runCount }: FloodMapPro
             ))}
           </div>
           {shown && !compare && (
-            <div className="text-gray-700">{shown === 'fast' ? 'Fast mode: steady peak depth' : 'Temporal CA depth'}</div>
+            <div className="text-gray-700">{shown === 'fast' ? 'Fast mode: steady peak extent' : 'Temporal CA depth'}</div>
           )}
           {compare && <div className="text-gray-700">Pan or zoom either map; both follow.</div>}
-        </div>
-      )}
-
-      {shown && (
-        <div className="absolute bottom-6 left-3 z-1000">
-          <DepthLegend />
         </div>
       )}
     </div>
