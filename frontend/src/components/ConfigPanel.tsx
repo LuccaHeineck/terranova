@@ -2,10 +2,13 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import type { Resolution, SimulationParams } from '../types/simulation'
 import type { Engine, SimulationStatus } from '../hooks/useSimulationRun'
+import { DEFAULT_OUTFLOW_FRACTION, GAUGE_DRIVEN_FRAME_INTERVAL, MAY_2024_REPLAY } from '../presets'
 
 interface ConfigPanelProps {
   status: SimulationStatus
   onStart: (params: SimulationParams) => void
+  /** Runs the May 2024 replay preset (fast, then temporal to the peak, in Compare). */
+  onReplay: () => void
   onStop: () => void
 }
 
@@ -18,19 +21,18 @@ type TemporalScenario = 'seeded_pool' | 'gauge_driven'
 // the user can still type any value afterwards.
 const DEFAULT_FRAME_INTERVAL: Record<TemporalScenario, number> = {
   seeded_pool: 5,
-  gauge_driven: 500,
+  gauge_driven: GAUGE_DRIVEN_FRAME_INTERVAL,
 }
 
 const inputClass = 'rounded border border-gray-300 px-2 py-1 disabled:opacity-50'
 
-export function ConfigPanel({ status, onStart, onStop }: ConfigPanelProps) {
+export function ConfigPanel({ status, onStart, onReplay, onStop }: ConfigPanelProps) {
   const [engine, setEngine] = useState<Engine>('temporal')
   const [scenario, setScenario] = useState<TemporalScenario>('seeded_pool')
   const [resolution, setResolution] = useState<Resolution>(30)
   const [steps, setSteps] = useState(200)
   const [frameInterval, setFrameInterval] = useState(DEFAULT_FRAME_INTERVAL.seeded_pool)
-  // Mirrors the backend's DEFAULT_OUTFLOW_FRACTION (simulation/engine.py) - keep in sync by hand.
-  const [outflowFraction, setOutflowFraction] = useState(0.085)
+  const [outflowFraction, setOutflowFraction] = useState(DEFAULT_OUTFLOW_FRACTION)
   // On by default: the observed peak is the moment the fast mode models and the
   // real flood extent was mapped at. Off runs the whole ~14-day record.
   const [stopAtPeak, setStopAtPeak] = useState(true)
@@ -40,6 +42,19 @@ export function ConfigPanel({ status, onStart, onStop }: ConfigPanelProps) {
   const selectScenario = (next: TemporalScenario) => {
     setScenario(next)
     setFrameInterval(DEFAULT_FRAME_INTERVAL[next])
+  }
+
+  // The form is set to the replay's temporal run, so afterwards it shows what actually ran and a plain
+  // Start re-runs that same temporal run.
+  const startReplay = () => {
+    const preset = MAY_2024_REPLAY.temporal
+    setEngine('temporal')
+    setScenario(preset.mode)
+    setResolution(preset.resolution)
+    setStopAtPeak(preset.stop_at_peak)
+    setFrameInterval(preset.frame_interval)
+    setOutflowFraction(preset.outflow_fraction)
+    onReplay()
   }
 
   const handleSubmit = (event: FormEvent) => {
@@ -61,6 +76,20 @@ export function ConfigPanel({ status, onStart, onStop }: ConfigPanelProps) {
     <form onSubmit={handleSubmit} className="flex h-full flex-col gap-4 overflow-y-auto border-r border-gray-200 bg-gray-50 p-4">
       <h1 className="text-lg font-semibold text-gray-900">Terranova</h1>
       <p className="text-sm text-gray-500">Vale do Taquari flood simulation</p>
+
+      <div className="flex flex-col gap-1.5 rounded-md border border-blue-200 bg-white p-3">
+        <button
+          type="button"
+          onClick={startReplay}
+          disabled={busy}
+          className="rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+        >
+          Replay May 2024 flood
+        </button>
+        <p className="text-xs text-gray-600">
+          Validated scenario: 90 m grid, the fast engine and the temporal CA to the observed peak, side by side.
+        </p>
+      </div>
 
       <fieldset className="flex flex-col gap-1 text-sm text-gray-700">
         <legend className="mb-1 font-medium">Engine</legend>

@@ -8,8 +8,14 @@ export default function App() {
 
   return (
     <div className="grid h-screen grid-cols-[280px_1fr_320px] grid-rows-1 overflow-hidden">
-      <ConfigPanel status={run.status} onStart={run.start} onStop={run.stop} />
-      <FloodMap bounds={run.bounds} layers={run.layers} activeEngine={run.activeEngine} runCount={run.runCount} />
+      <ConfigPanel status={run.status} onStart={run.start} onReplay={run.startReplay} onStop={run.stop} />
+      <FloodMap
+        bounds={run.bounds}
+        layers={run.layers}
+        activeEngine={run.activeEngine}
+        runCount={run.runCount}
+        replayActive={run.replayActive}
+      />
       <LogPanel
         status={run.status}
         gridShape={run.gridShape}

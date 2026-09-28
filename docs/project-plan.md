@@ -843,6 +843,71 @@ before the next was started. Frontend only; no backend or engine change.
   terrain shading (still backlog). The ramp depends on the basemap: switching basemaps again means
   re-running the contrast check.
 
+**Fast pane shows extent only + "Replay May 2024 flood" preset.** Frontend only; no backend or engine
+change.
+- **The fast overlay is one flat "flooded" color.** Fast-mode depths (~33–65 m, §19's uncalibrated steady
+  Manning depth) against a ~20 m river rise are not physically plausible. Shading them on the depth ramp
+  implied a precision the engine doesn't have.
+  - `rendering/depthToImage.ts` now has one rasterizer loop with a per-cell color function.
+    `depthToImageDataUrl` (the six-band ramp) stays for the temporal overlay, and `extentToImageDataUrl`
+    (`FAST_EXTENT_COLOR`) is used for the fast overlay. Both use the same wet-cell cutoff, so the drawn
+    extent is still the counted extent.
+  - Each pane now carries its own legend (`MapPane`'s `legend` slot). The temporal pane gets
+    `DepthLegend`. The fast pane gets the new `ExtentLegend`: "Flooded (depth > 0.01 m) — Extent only:
+    the fast mode's depths are not calibrated". The fast labels read "steady peak extent".
+- **The color is burnt orange `#c2410c`, checked rather than picked.** It was checked with the `dataviz`
+  skill's validator and composited at the 0.8 overlay opacity:
+  - against OSM it gives 3.37:1 on land and 2.71:1 on water, above the ramp's own 2.12:1 floor; opaque,
+    it is ≥ 3:1 on land, water, residential and forest;
+  - against every ramp band it is at OKLab ΔE ≥ 32, and ≥ 22 under simulated protan/deutan/tritan
+    vision (target ≥ 8).
+
+  A blue or purple would read as "another depth", so a hue opposite the ramp was chosen deliberately.
+- **Preset button: "Replay May 2024 flood"** (top of `ConfigPanel`, labelled "Validated scenario: 90 m
+  grid, the fast engine and the temporal CA to the observed peak, side by side").
+  - One click sets the form to the 90m grid, gauge-driven, `stop_at_peak`, frame interval 500 and the
+    default outflow fraction. It then runs the fast engine, and only after it completes the temporal run,
+    with the map opened on Compare.
+  - The parameters live in `src/presets.ts` (`MAY_2024_REPLAY`, plus `DEFAULT_OUTFLOW_FRACTION`, moved
+    there from `ConfigPanel`). The outflow fraction is pinned, because §21's numbers were produced with
+    it.
+- **`useSimulationRun` changes:**
+  - `run(params, {onDone, keepLog})`. The chain runs inside the stream's token-guarded `onDone`, so Stop,
+    a newer run or an error cancels it.
+  - A pending layer is placed as soon as a run starts, so a pane exists before its first frame.
+  - `settleLayers()` now handles Stop and errors: layers with a frame are kept and marked finished, and
+    frame-less ones (a run stopped before its first frame, or the replay's queued temporal run) are
+    dropped, so no pane waits forever. This replaces Stop's single `finishLayer(activeEngine)`, and also
+    fixes an errored run whose wall-clock said "so far" forever.
+  - `replayActive` makes Compare the default view until the next manual run.
+  - The §21 stale-state rules (`isComparable`) are unchanged, and they apply to pending layers too.
+- **Verified in a real browser** (Playwright + Chromium against real `uvicorn` + `npm run dev`):
+  - **Preset end to end.**
+    - The Compare layout and the fast overlay appeared at +0.10–0.16 s after the click; the first temporal
+      frame followed at +1.7–1.9 s.
+    - The temporal run reached the peak at **step 134,639** with **1,955** flooded cells, in 7.4 min of
+      wall-clock.
+    - The log panel read **1,648 both / 307 temporal only / 1,192 fast only**, exactly §21, with no
+      "different moments" warning. Both POST bodies were confirmed.
+    - The fast pane decoded to exactly one color (`#c2410c`) over 2,840 cells. The temporal pane decoded
+      to all six ramp colors at the peak and never to the fast color.
+  - **Mid-replay:**
+    - Temporal / Fast / Compare switching each showed the right single pane and legend.
+    - **Stop in the temporal phase** kept both panes, showed the "different moments" warning, and started
+      nothing new in the following 4 s.
+    - **Stop in the fast phase** sent no gauge-driven POST and left no phantom "starting…" pane.
+  - **After a stopped replay:**
+    - fast @ 90m kept the temporal layer, with Compare available but not forced;
+    - grid → 30m + fast cleared both 90m layers;
+    - a seeded-pool run cleared the fast layer.
+- **Bugs:** none in the app, from either the browser or `tsc`/lint. `tsc -b`, `npm run build` and
+  `npm run lint` were clean at every step, and the browser checks passed first time. The only failure
+  in the session was the test driver's own console encoding. Backend untouched; the suite is 112/112.
+- Git housekeeping first: `a071569` had bundled the fast engine, the API wiring, the polish and an
+  unrelated docs change. Before being pushed, it was split into `docs` §20 / fast engine / API + frontend,
+  plus the `docker-compose.yml` `FRONTEND_PORT` change on its own. The suite, build and lint passed at
+  each commit.
+
 To run the CA-engine PoC directly (bare-metal, unrelated to Docker): `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 
 To run the real end-to-end CSI validation against the May 2024 event (bare-metal, expect ~30 minutes):
@@ -927,19 +992,21 @@ frontend/
     App.tsx                # 3-column layout: ConfigPanel | FloodMap (one map, or two panes in Compare) | LogPanel
     index.css                # @import "tailwindcss";
     types/simulation.ts        # TS mirror of the backend JSON contract (incl. Bounds, mode, resolution, fast-frame fields)
+    presets.ts                 # MAY_2024_REPLAY (the validated 90m fast + temporal-to-peak scenario), DEFAULT_OUTFLOW_FRACTION
     api/
       config.ts                 # API_BASE_URL / WS_BASE_URL (VITE_API_BASE_URL, default localhost:8000)
       client.ts                  # createSimulation() -> POST /simulations
       stream.ts                   # openSimulationStream() -> WebSocket wrapper (handles code 4004, disconnects)
     hooks/
-      useSimulationRun.ts          # orchestration: idle -> starting -> streaming -> done|stopped|error, + per-engine result layers
+      useSimulationRun.ts          # orchestration: idle -> starting -> streaming -> done|stopped|error, per-engine result layers, May 2024 replay chain
     rendering/
-      depthToImage.ts               # DEPTH_BANDS (fixed 6-band blue depth scale) -> canvas data URL; flooded-cell and temporal/fast agreement counts
+      depthToImage.ts               # temporal: DEPTH_BANDS (fixed 6-band blue depth scale); fast: one flat extent color -> canvas data URL; flooded-cell and agreement counts
     components/
-      ConfigPanel.tsx                # engine toggle (temporal/fast), grid, scenario + steps/frame_interval/outflow_fraction, Stop
-      FloodMap.tsx                    # Temporal/Fast/Compare view selector; Compare = two synced MapPanes side by side; shared legend
-      MapPane.tsx                      # one plain Leaflet map: OSM tiles + L.ImageOverlay via API bounds, ResizeObserver-aware
-      DepthLegend.tsx                   # depth -> color key with numeric ranges, read from DEPTH_BANDS
+      ConfigPanel.tsx                # "Replay May 2024 flood" preset; engine toggle (temporal/fast), grid, scenario + steps/frame_interval/outflow_fraction, Stop
+      FloodMap.tsx                    # Temporal/Fast/Compare view selector; Compare = two synced MapPanes side by side, each with its own legend
+      MapPane.tsx                      # one plain Leaflet map: OSM tiles + L.ImageOverlay via API bounds + its legend, ResizeObserver-aware
+      DepthLegend.tsx                   # depth -> color key with numeric ranges, read from DEPTH_BANDS (temporal pane)
+      ExtentLegend.tsx                  # fast pane key: one flooded color, "extent only, depth not calibrated"
       LogPanel.tsx                     # status/grid_shape/bounds, temporal-vs-fast comparison block, scrolling log, errors
 ```
 

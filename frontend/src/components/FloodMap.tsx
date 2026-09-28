@@ -15,6 +15,7 @@ interface FloodMapProps {
   layers: ResultLayers
   activeEngine: Engine
   runCount: number
+  replayActive: boolean
 }
 
 const VIEW_LABEL: Record<MapView, string> = {
@@ -23,16 +24,27 @@ const VIEW_LABEL: Record<MapView, string> = {
   compare: 'Compare',
 }
 
-/** The view actually drawn: the selected one if its data exists, else whichever layer does. */
-function resolveView(view: MapView, layers: ResultLayers): MapView | null {
-  const has = (engine: Engine) => Boolean(layers[engine]?.frame)
-  if (view === 'compare') return has('temporal') && has('fast') ? 'compare' : resolveView('temporal', layers)
-  if (has(view)) return view
+/**
+ * Which views can be drawn. A single view needs its engine's frame. Compare needs both layers and at least one
+ * frame: a layer without a frame yet is a run that is starting or queued (useSimulationRun drops frame-less
+ * layers on Stop or error), and its pane shows the basemap until frames arrive.
+ */
+function availableViews(layers: ResultLayers): Record<MapView, boolean> {
+  const temporal = Boolean(layers.temporal?.frame)
+  const fast = Boolean(layers.fast?.frame)
+  return { temporal, fast, compare: Boolean(layers.temporal && layers.fast) && (temporal || fast) }
+}
+
+/** The view actually drawn: the selected one if it can be, else whichever single view can. */
+function resolveView(view: MapView, available: Record<MapView, boolean>): MapView | null {
+  if (available[view]) return view
+  if (view === 'compare') return resolveView('temporal', available)
   const other: Engine = view === 'fast' ? 'temporal' : 'fast'
-  return has(other) ? other : null
+  return available[other] ? other : null
 }
 
 function paneLabel(engine: Engine, layer: ResultLayer | null): string {
+  if (!layer?.frame) return engine === 'fast' ? 'Fast: computing…' : 'Temporal CA: starting…'
   if (engine === 'fast') return 'Fast: steady peak extent'
   const hours = (layer?.frame?.elapsed_time ?? 0) / 3600
   return `Temporal CA: t = ${hours.toFixed(1)} h`
@@ -107,11 +119,14 @@ function useSyncedMaps(bounds: Bounds | null) {
   return { onPrimaryReady, onSecondaryReady }
 }
 
-export function FloodMap({ bounds, layers, activeEngine, runCount }: FloodMapProps) {
-  // A manual view choice only lasts for the run it was made in; a new run shows the engine just run.
+export function FloodMap({ bounds, layers, activeEngine, runCount, replayActive }: FloodMapProps) {
+  // A manual view choice only lasts for the run it was made in; a new run shows the engine just run, or
+  // Compare for the May 2024 replay.
   const [choice, setChoice] = useState<{ view: MapView; runCount: number } | null>(null)
-  const view: MapView = choice && choice.runCount === runCount ? choice.view : activeEngine
-  const shown = resolveView(view, layers)
+  const defaultView: MapView = replayActive ? 'compare' : activeEngine
+  const view: MapView = choice && choice.runCount === runCount ? choice.view : defaultView
+  const available = availableViews(layers)
+  const shown = resolveView(view, available)
   const compare = shown === 'compare'
 
   const temporalUrl = useOverlayUrl('temporal', layers.temporal, shown === 'temporal' || compare)
@@ -119,12 +134,6 @@ export function FloodMap({ bounds, layers, activeEngine, runCount }: FloodMapPro
   // The primary pane shows the temporal result, or the fast one when that's the only view.
   const primary: Engine = shown === 'fast' ? 'fast' : 'temporal'
   const { onPrimaryReady, onSecondaryReady } = useSyncedMaps(bounds)
-
-  const available: Record<MapView, boolean> = {
-    temporal: Boolean(layers.temporal?.frame),
-    fast: Boolean(layers.fast?.frame),
-    compare: Boolean(layers.temporal?.frame && layers.fast?.frame),
-  }
 
   return (
     <div className="relative h-full w-full">

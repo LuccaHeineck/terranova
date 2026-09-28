@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createSimulation } from '../api/client'
 import { openSimulationStream } from '../api/stream'
+import { MAY_2024_REPLAY } from '../presets'
 import type { Bounds, Resolution, RunMode, SimulationFrame, SimulationParams } from '../types/simulation'
 
 export type SimulationStatus = 'idle' | 'starting' | 'streaming' | 'done' | 'stopped' | 'error'
@@ -49,6 +50,18 @@ function logLine(mode: RunMode, frame: SimulationFrame): string {
   return `step ${frame.step}: volume=${frame.volume.toFixed(4)}${elapsedNote}`
 }
 
+/** A layer for a run that has started (or, in a replay, is queued) but has no frame yet. */
+function pendingLayer(mode: RunMode, resolution: Resolution): ResultLayer {
+  return { mode, resolution, frame: null, wallClockSeconds: 0, finished: false }
+}
+
+interface RunOptions {
+  /** Called once the stream completes - never after a Stop, a newer run or an error. */
+  onDone?: () => void
+  /** Keep the previous run's log lines (the replay's fast line stays above the temporal run's). */
+  keepLog?: boolean
+}
+
 export function useSimulationRun() {
   const [status, setStatus] = useState<SimulationStatus>('idle')
   const [gridShape, setGridShape] = useState<[number, number] | null>(null)
@@ -57,6 +70,8 @@ export function useSimulationRun() {
   const [activeEngine, setActiveEngine] = useState<Engine>('temporal')
   // Incremented per run; lets the map reset its view to the engine just run.
   const [runCount, setRunCount] = useState(0)
+  // True from the May 2024 replay preset until the next manual run: the map then opens on Compare.
+  const [replayActive, setReplayActive] = useState(false)
   const [log, setLog] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const closeStreamRef = useRef<(() => void) | null>(null)
@@ -64,6 +79,7 @@ export function useSimulationRun() {
   // late message can never write into the current run's state.
   const runTokenRef = useRef(0)
   const startedAtRef = useRef(0)
+  const activeEngineRef = useRef<Engine>('temporal')
 
   const finishLayer = useCallback((engine: Engine) => {
     const wallClockSeconds = (performance.now() - startedAtRef.current) / 1000
@@ -73,8 +89,26 @@ export function useSimulationRun() {
     })
   }, [])
 
-  const start = useCallback(
-    async (params: SimulationParams) => {
+  /**
+   * After a Stop or an error: a layer that has a frame keeps it, now finished; a layer that never got one (a run
+   * stopped before its first frame, or the replay's queued temporal run) goes, so no pane waits on nothing.
+   */
+  const settleLayers = useCallback(() => {
+    const wallClockSeconds = (performance.now() - startedAtRef.current) / 1000
+    const active = activeEngineRef.current
+    setLayers((prev) => {
+      const settle = (engine: Engine): ResultLayer | null => {
+        const layer = prev[engine]
+        if (!layer || layer.finished) return layer
+        if (!layer.frame) return null
+        return { ...layer, finished: true, wallClockSeconds: engine === active ? wallClockSeconds : layer.wallClockSeconds }
+      }
+      return { temporal: settle('temporal'), fast: settle('fast') }
+    })
+  }, [])
+
+  const run = useCallback(
+    async (params: SimulationParams, options: RunOptions = {}) => {
       closeStreamRef.current?.()
       closeStreamRef.current = null
       const token = ++runTokenRef.current
@@ -85,13 +119,14 @@ export function useSimulationRun() {
 
       setStatus('starting')
       setError(null)
-      setLog([])
+      if (!options.keepLog) setLog([])
       setActiveEngine(engine)
+      activeEngineRef.current = engine
       setRunCount((n) => n + 1)
-      // This engine's previous result goes now, not when the new one's first frame arrives;
+      // This engine's previous result goes now, replaced by a pending layer (so its pane exists from the start);
       // the other engine's result stays only if it's still a like-for-like comparison.
       setLayers((prev) => ({
-        [engine]: null,
+        [engine]: pendingLayer(mode, resolution),
         [other]: prev[other] && isComparable(prev[other], mode, resolution) ? prev[other] : null,
       }) as ResultLayers)
       startedAtRef.current = performance.now()
@@ -102,10 +137,6 @@ export function useSimulationRun() {
         setGridShape(created.grid_shape)
         setBounds(created.bounds)
         setStatus('streaming')
-        setLayers((prev) => ({
-          ...prev,
-          [engine]: { mode, resolution, frame: null, wallClockSeconds: 0, finished: false },
-        }))
 
         closeStreamRef.current = openSimulationStream(created.run_id, {
           onFrame: (frame) => {
@@ -128,32 +159,69 @@ export function useSimulationRun() {
             if (token !== runTokenRef.current) return
             finishLayer(engine)
             setStatus('done')
+            options.onDone?.()
           },
           onError: (message) => {
             if (token !== runTokenRef.current) return
+            settleLayers()
             setError(message)
             setStatus('error')
           },
         })
       } catch (e) {
         if (token !== runTokenRef.current) return
+        settleLayers()
         setError(e instanceof Error ? e.message : String(e))
         setStatus('error')
       }
     },
-    [finishLayer],
+    [finishLayer, settleLayers],
   )
+
+  /** A run started from the config panel. */
+  const start = useCallback(
+    (params: SimulationParams) => {
+      setReplayActive(false)
+      return run(params)
+    },
+    [run],
+  )
+
+  /**
+   * The May 2024 replay preset: the fast run, then - only if it completes - the temporal run to the peak.
+   * The temporal layer is queued up front so Compare opens with both panes; it is comparable with the fast
+   * run, so the fast run's start keeps it. Stop cancels the chain (the fast run's onDone never fires).
+   */
+  const startReplay = useCallback(() => {
+    const { fast, temporal } = MAY_2024_REPLAY
+    setReplayActive(true)
+    setLayers({ temporal: pendingLayer(temporal.mode, temporal.resolution), fast: null })
+    void run(fast, { onDone: () => void run(temporal, { keepLog: true }) })
+  }, [run])
 
   /** Abandons the current run; its latest frame stays on screen (and available for comparison). */
   const stop = useCallback(() => {
     runTokenRef.current++
     closeStreamRef.current?.()
     closeStreamRef.current = null
-    finishLayer(activeEngine)
+    settleLayers()
     setStatus('stopped')
-  }, [activeEngine, finishLayer])
+  }, [settleLayers])
 
   useEffect(() => () => closeStreamRef.current?.(), [])
 
-  return { status, gridShape, bounds, layers, activeEngine, runCount, log, error, start, stop }
+  return {
+    status,
+    gridShape,
+    bounds,
+    layers,
+    activeEngine,
+    runCount,
+    replayActive,
+    log,
+    error,
+    start,
+    startReplay,
+    stop,
+  }
 }

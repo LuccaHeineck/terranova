@@ -200,7 +200,9 @@ What belongs here: the React + Vite + Leaflet app — map rendering, config pane
 fast), live log/metrics panel. `useSimulationRun` keeps the latest result of each engine as a separate
 layer so a fast result and a gauge-driven temporal result on the same grid can be compared on the map
 (Temporal / Fast / Compare views); a layer that no longer describes the same scenario and grid is cleared
-when the next run starts.
+when the next run starts. The temporal overlay is shaded by depth; the fast one is drawn as extent only (one
+flat color), since its depths are not calibrated. A "Replay May 2024 flood" preset (`src/presets.ts`) runs
+the validated scenario in one click: fast, then temporal to the peak, on the 90m grid, in Compare.
 
 What does NOT belong here: any backend logic. The frontend only ever calls `backend/api/`'s HTTP/WebSocket
 contract; it never imports Python code or reads `data/` directly.

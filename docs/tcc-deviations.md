@@ -1034,6 +1034,15 @@ POST sat unanswered until the abandoned run's next frame. It is covered by
 `test_stream_simulation_stops_computing_when_client_disconnects`. The per-step cost of the yield is
 negligible against a 3–17 ms engine step.
 
+**Follow-up: the fast overlay is drawn as extent only.** The UI now draws the fast mode's result in one
+flat "flooded" color, and its legend says the depth is not calibrated. Only the temporal overlay uses the
+depth ramp. Fast-mode depths are ~33–65 m, §19's steady Manning channel depth at the untuned
+`_MIN_SLOPE` floor, against a ~20 m river rise. Only the fast extent was validated (§19), so shading
+those depths would suggest a precision the engine doesn't have. The API is unchanged: the fast frame
+still carries the depth grid, which is what `flooded_cells` and the agreement counts are computed from.
+The same follow-up added a one-click "Replay May 2024 flood" preset. It runs this section's comparison
+(fast, then temporal to the peak, on the 90m grid) exactly as scored above.
+
 ---
 
 *Keep this file updated alongside `docs/project-plan.md` whenever a new roadmap step introduces another
