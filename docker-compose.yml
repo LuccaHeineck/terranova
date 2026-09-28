@@ -8,7 +8,7 @@ services:
       - ./data:/app/data
     environment:
       - TERRANOVA_DATA_DIR=/app/data
-      - CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+      - CORS_ALLOWED_ORIGINS=http://localhost:${FRONTEND_PORT:-5173},http://127.0.0.1:${FRONTEND_PORT:-5173}
 
   frontend:
     build:
@@ -16,6 +16,8 @@ services:
       args:
         VITE_API_BASE_URL: http://localhost:8000
     ports:
-      - "5173:80"
+      # Host port is overridable (FRONTEND_PORT=5174 docker compose up) in case
+      # another stack already publishes 5173; CORS origins above follow it.
+      - "${FRONTEND_PORT:-5173}:80"
     depends_on:
       - backend

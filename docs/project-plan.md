@@ -860,7 +860,9 @@ To run the Torres-inspired fast mode against the same event (seconds, not minute
 `cd backend && .venv/bin/python -m examples.fast_mode_may2024` (same raw files; the Estrela-gap
 correction queries SGB live - add `--skip-gap-correction` to run offline with naive scoring only).
 
-To run the full containerized stack: `docker compose up --build` from the repo root, then open `http://localhost:5173`.
+To run the full containerized stack: `docker compose up --build` from the repo root, then open `http://localhost:5173`. If
+host port 5173 is already taken (another stack or a bare `npm run dev`), pick another one:
+`FRONTEND_PORT=5174 docker compose up --build` → `http://localhost:5174` (CORS origins follow it).
 
 ## Structure so far
 
