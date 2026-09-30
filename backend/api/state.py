@@ -25,6 +25,7 @@ while seeded-pool runs keep working.
 from dataclasses import dataclass
 
 import numpy as np
+from affine import Affine
 
 from ingestion.hydrograph import Hydrograph
 
@@ -35,6 +36,10 @@ class Grid:
     N: np.ndarray
     dx: float  # cell size, m
     bounds: tuple[float, float, float, float]  # west, south, east, north (EPSG:4326)
+    # The grid's own projected CRS and affine transform (row/col <-> CRS coordinates),
+    # for placing a WGS84 point on an exact cell - see ingestion.dem.lonlat_to_cell.
+    crs: str
+    transform: Affine
     inflow_mask: np.ndarray
     # Padded (rows+2, cols+2) outlet overrides for simulation.engine.step /
     # fast_engine.classify_steady_flood; None means walled on every side.

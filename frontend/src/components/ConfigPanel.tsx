@@ -1,18 +1,27 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import type { Resolution, SimulationParams } from '../types/simulation'
-import type { Engine, SimulationStatus } from '../hooks/useSimulationRun'
-import { DEFAULT_OUTFLOW_FRACTION, GAUGE_DRIVEN_FRAME_INTERVAL, MAY_2024_REPLAY } from '../presets'
+import type { SimulationStatus } from '../hooks/useSimulationRun'
+import type { RunSetup, TemporalScenario } from '../hooks/useRunSetup'
+import {
+  DEFAULT_OUTFLOW_FRACTION,
+  DEFAULT_SEED_VOLUME,
+  GAUGE_DRIVEN_FRAME_INTERVAL,
+  MAX_SEED_VOLUME,
+  MAY_2024_REPLAY,
+} from '../presets'
 
 interface ConfigPanelProps {
   status: SimulationStatus
+  /** Engine, scenario, grid and seed marker - shared with the map, which places the marker. */
+  setup: RunSetup
+  /** Why the map can't take a seed location right now (the grid outlines didn't load), if so. */
+  seedPlacementError: string | null
   onStart: (params: SimulationParams) => void
   /** Runs the May 2024 replay preset (fast, then temporal to the peak, in Compare). */
   onReplay: () => void
   onStop: () => void
 }
-
-type TemporalScenario = 'seeded_pool' | 'gauge_driven'
 
 // A seeded-pool run is a few hundred steps, so a frame every 5 is fine. A
 // gauge-driven run covers the whole real May 2024 event in 100k+ engine steps -
@@ -26,11 +35,60 @@ const DEFAULT_FRAME_INTERVAL: Record<TemporalScenario, number> = {
 
 const inputClass = 'rounded border border-gray-300 px-2 py-1 disabled:opacity-50'
 
-export function ConfigPanel({ status, onStart, onReplay, onStop }: ConfigPanelProps) {
-  const [engine, setEngine] = useState<Engine>('temporal')
-  const [scenario, setScenario] = useState<TemporalScenario>('seeded_pool')
-  const [resolution, setResolution] = useState<Resolution>(30)
+/** The seed pool is a 5x5 patch (simulation/engine.py), before clipping at a grid edge. */
+const SEED_PATCH_CELLS = 25
+
+function formatNumber(value: number): string {
+  return value.toLocaleString('en-US', { maximumFractionDigits: 1 })
+}
+
+interface SeedLocationFieldProps {
+  seed: RunSetup['seed']
+  resolution: Resolution
+  error: string | null
+  busy: boolean
+  onClear: () => void
+}
+
+/** Where the pool goes: the marker placed on the map, or - with none - the terrain's lowest point. */
+function SeedLocationField({ seed, resolution, error, busy, onClear }: SeedLocationFieldProps) {
+  return (
+    <div className="flex flex-col gap-1 text-sm text-gray-700">
+      <span>Seed location</span>
+      {seed ? (
+        <div className="flex items-center justify-between gap-2 rounded border border-gray-300 bg-white px-2 py-1">
+          <span className="font-mono text-xs">
+            {seed.lat.toFixed(5)}, {seed.lon.toFixed(5)}
+          </span>
+          <button
+            type="button"
+            onClick={onClear}
+            disabled={busy}
+            className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-800 hover:bg-gray-200 disabled:opacity-50"
+          >
+            Clear
+          </button>
+        </div>
+      ) : (
+        <span className="rounded border border-dashed border-gray-300 bg-white px-2 py-1 text-xs">
+          Lowest point of the terrain (default)
+        </span>
+      )}
+      <span className="text-xs text-gray-500">
+        {error
+          ? `Can't place a seed on the map yet: the grid outline didn't load (${error}). Retrying…`
+          : seed
+            ? 'Click the map again to move it; Clear goes back to the lowest point.'
+            : `Click the map inside the dashed ${resolution} m grid outline to choose a spot instead.`}
+      </span>
+    </div>
+  )
+}
+
+export function ConfigPanel({ status, setup, seedPlacementError, onStart, onReplay, onStop }: ConfigPanelProps) {
+  const { engine, scenario, resolution, seed, setEngine, setScenario, setResolution } = setup
   const [steps, setSteps] = useState(200)
+  const [seedVolume, setSeedVolume] = useState(DEFAULT_SEED_VOLUME)
   const [frameInterval, setFrameInterval] = useState(DEFAULT_FRAME_INTERVAL.seeded_pool)
   const [outflowFraction, setOutflowFraction] = useState(DEFAULT_OUTFLOW_FRACTION)
   // On by default: the observed peak is the moment the fast mode models and the
@@ -68,7 +126,9 @@ export function ConfigPanel({ status, onStart, onReplay, onStop }: ConfigPanelPr
       resolution,
       frame_interval: frameInterval,
       outflow_fraction: outflowFraction,
-      ...(scenario === 'seeded_pool' ? { steps } : { stop_at_peak: stopAtPeak }),
+      ...(scenario === 'seeded_pool'
+        ? { steps, seed_volume: seedVolume, ...(seed ? { seed_location: seed } : {}) }
+        : { stop_at_peak: stopAtPeak }),
     })
   }
 
@@ -160,17 +220,49 @@ export function ConfigPanel({ status, onStart, onReplay, onStop }: ConfigPanelPr
           </fieldset>
 
           {scenario === 'seeded_pool' ? (
-            <label className="flex flex-col gap-1 text-sm text-gray-700">
-              Steps
-              <input
-                type="number"
-                min={1}
-                value={steps}
-                disabled={busy}
-                onChange={(e) => setSteps(Number(e.target.value))}
-                className={inputClass}
+            <>
+              <label className="flex flex-col gap-1 text-sm text-gray-700">
+                Steps
+                <input
+                  type="number"
+                  min={1}
+                  value={steps}
+                  disabled={busy}
+                  onChange={(e) => setSteps(Number(e.target.value))}
+                  className={inputClass}
+                />
+              </label>
+
+              <div className="flex flex-col gap-1 text-sm text-gray-700">
+                <label className="flex flex-col gap-1">
+                  Seed volume
+                  <input
+                    type="number"
+                    min={1}
+                    max={MAX_SEED_VOLUME}
+                    step="any"
+                    value={seedVolume}
+                    disabled={busy}
+                    onChange={(e) => setSeedVolume(Number(e.target.value))}
+                    aria-describedby="seed-volume-hint"
+                    className={inputClass}
+                  />
+                </label>
+                <span id="seed-volume-hint" className="text-xs text-gray-500">
+                  Summed cell depth (m), as the log's volume: {formatNumber(seedVolume / SEED_PATCH_CELLS)} m deep over
+                  the 5×5 seed patch, ≈ {formatNumber(seedVolume * resolution * resolution)} m³ on the {resolution} m
+                  grid.
+                </span>
+              </div>
+
+              <SeedLocationField
+                seed={seed}
+                resolution={resolution}
+                error={seedPlacementError}
+                busy={busy}
+                onClear={setup.clearSeed}
               />
-            </label>
+            </>
           ) : (
             <label className="flex items-center gap-2 text-sm text-gray-700">
               <input

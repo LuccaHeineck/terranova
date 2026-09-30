@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import L from 'leaflet'
-import type { Bounds } from '../types/simulation'
+import type { Bounds, LatLon } from '../types/simulation'
 import type { CompactFrame, DepthGrid } from '../rendering/depthGrid'
 import type { Engine, ResultLayers } from '../hooks/useSimulationRun'
 import type { Timeline as TimelineState } from '../hooks/useTimeline'
@@ -21,6 +21,13 @@ interface FloodMapProps {
   replayActive: boolean
   /** Which temporal frame is shown: the timeline drives the temporal pane (never the fast one). */
   timeline: TimelineState
+  /** The selected grid's outline, while the setup is a seeded pool (null otherwise). */
+  footprint: [number, number][] | null
+  seedMarker: LatLon | null
+  /** Places the seed marker; null while clicks can't place one (not seeded pool, or a run is busy). */
+  onMapClick: ((point: LatLon) => void) | null
+  /** Why the last click placed nothing (outside the grid). */
+  seedNotice: string | null
 }
 
 const VIEW_LABEL: Record<MapView, string> = {
@@ -123,7 +130,19 @@ function useSyncedMaps(bounds: Bounds | null) {
   return { onPrimaryReady, onSecondaryReady }
 }
 
-export function FloodMap({ bounds, layers, activeEngine, runCount, replayActive, timeline }: FloodMapProps) {
+export function FloodMap({
+  bounds,
+  layers,
+  activeEngine,
+  runCount,
+  replayActive,
+  timeline,
+  footprint,
+  seedMarker,
+  onMapClick,
+  seedNotice,
+}: FloodMapProps) {
+  const seedProps = { footprint, seedMarker, onMapClick }
   // A manual view choice only lasts for the run it was made in; a new run shows the engine just run, or
   // Compare for the May 2024 replay.
   const [choice, setChoice] = useState<{ view: MapView; runCount: number } | null>(null)
@@ -151,6 +170,7 @@ export function FloodMap({ bounds, layers, activeEngine, runCount, replayActive,
           label={compare ? paneLabel('temporal', timeline.frame) : undefined}
           legend={shown ? LEGEND[primary] : undefined}
           onMapReady={onPrimaryReady}
+          {...seedProps}
         />
         {compare && (
           <MapPane
@@ -160,6 +180,7 @@ export function FloodMap({ bounds, layers, activeEngine, runCount, replayActive,
             legend={LEGEND.fast}
             fitOnMount={false}
             onMapReady={onSecondaryReady}
+            {...seedProps}
           />
         )}
       </div>
@@ -173,6 +194,15 @@ export function FloodMap({ bounds, layers, activeEngine, runCount, replayActive,
               Fast mode: one steady frame at the peak. It does not follow the timeline.
             </div>
           )}
+        </div>
+      )}
+
+      {seedNotice && (
+        <div
+          role="status"
+          className="pointer-events-none absolute top-3 left-1/2 z-1000 -translate-x-1/2 rounded-md bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-900 shadow-md ring-1 ring-amber-300"
+        >
+          {seedNotice}
         </div>
       )}
 

@@ -8,7 +8,7 @@ from api import state
 from api.routers import health, simulations
 from config import settings
 from config.settings import CORS_ALLOWED_ORIGINS, HYDROGRAPH_INFLOW_EDGE, HYDROGRAPH_OUTLET_EDGE
-from ingestion.dem import build_elevation_matrix, get_geographic_bounds
+from ingestion.dem import build_elevation_matrix, get_geographic_bounds, get_georeference
 from ingestion.hydrograph import build_hydrograph, find_boundary_inflow_mask, find_boundary_outlet
 from ingestion.landcover import build_roughness_matrix
 
@@ -17,11 +17,14 @@ def _load_grid(dem_path: Path, landcover_path: Path, resolution: float) -> state
     Z = build_elevation_matrix(processed_path=dem_path, resolution=resolution)
     N = build_roughness_matrix(reference_path=dem_path, processed_path=landcover_path)
     boundary_elevation, boundary_roughness = find_boundary_outlet(Z, N, HYDROGRAPH_OUTLET_EDGE)
+    crs, transform = get_georeference(dem_path)
     return state.Grid(
         Z=Z,
         N=N,
         dx=resolution,
         bounds=get_geographic_bounds(dem_path),
+        crs=crs,
+        transform=transform,
         inflow_mask=find_boundary_inflow_mask(Z, HYDROGRAPH_INFLOW_EDGE),
         boundary_elevation=boundary_elevation,
         boundary_roughness=boundary_roughness,

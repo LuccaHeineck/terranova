@@ -205,7 +205,11 @@ flat color), since its depths are not calibrated. A "Replay May 2024 flood" pres
 the validated scenario in one click: fast, then temporal to the peak, on the 90m grid, in Compare. A temporal run's frames are
 kept client-side as `Float32Array`s in a bounded, decimated buffer (`rendering/frameBuffer.ts`) that lives on its
 layer, so a timeline (`hooks/useTimeline.ts`, `components/Timeline.tsx`) can re-render any past frame without
-re-running; it drives the temporal pane only.
+re-running; it drives the temporal pane only. In seeded-pool mode a click on the map places the seed marker
+(`hooks/useRunSetup.ts` owns engine/scenario/grid/marker and clears the marker on a grid or mode change); the
+grid's true outline comes from `GET /grids` so clicks outside it are rejected before any run, and the backend
+converts the marker's lat/lon to a cell itself (`ingestion/dem.py`'s `lonlat_to_cell`, through the grid's real
+UTM transform), rejecting an outside point with a 422.
 
 What does NOT belong here: any backend logic. The frontend only ever calls `backend/api/`'s HTTP/WebSocket
 contract; it never imports Python code or reads `data/` directly.

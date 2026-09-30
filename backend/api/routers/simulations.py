@@ -12,8 +12,10 @@ A run is created via `POST /simulations` (validated parameters, no simulation
 work happens yet) and consumed exactly once via
 `WS /simulations/{run_id}/stream`. Three modes:
 
-- `"seeded_pool"` - closed system, a single water pool seeded at the terrain's
-  lowest point (unchanged since step 5).
+- `"seeded_pool"` - closed system, a single water pool of `seed_volume`
+  (default 400, the step-5 constant) seeded at the terrain's lowest point, or at
+  an optional WGS84 `seed_location` placed on the grid through its real
+  projected transform (`ingestion.dem.lonlat_to_cell`).
 - `"gauge_driven"` - open system, driven by the real May 2024 gauge hydrograph
   via `simulation.engine`'s `inflow`/`compute_stable_dt` (roadmap step 9),
   optionally stopping at the observed peak (`stop_at_peak`).
@@ -31,6 +33,7 @@ pending run only exists in an in-memory dict between those two calls.
 import asyncio
 import time
 import uuid
+from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
@@ -39,11 +42,13 @@ from pydantic import BaseModel, Field, model_validator
 from starlette.websockets import WebSocketState
 
 from api.state import Grid, get_grids, get_hydrograph
+from ingestion.dem import grid_footprint, lonlat_to_cell
 from ingestion.hydrograph import Hydrograph, discharge_to_inflow
 from simulation.engine import (
     DEFAULT_OUTFLOW_FRACTION,
     compute_stable_dt,
     outflow_fraction_for_dt,
+    seed_pool_at,
     seed_pool_at_lowest_point,
     step,
 )
@@ -51,7 +56,11 @@ from simulation.fast_engine import classify_steady_flood
 
 router = APIRouter()
 
-SEED_VOLUME = 400.0
+# Seeded-pool volume, in the frames' own `volume` unit: summed cell depth (m).
+# The default, the step-5 constant, fills the 5x5 seed patch 16 m deep; the cap
+# fills it 400 m deep - past that it's no longer a pool worth simulating.
+DEFAULT_SEED_VOLUME = 400.0
+MAX_SEED_VOLUME = 10_000.0
 
 # Wet-cell cutoff for the fast engine's `flooded` mask - the same value
 # examples/validate_may2024.py and examples/fast_mode_may2024.py threshold both
@@ -60,6 +69,16 @@ FLOODED_DEPTH_THRESHOLD_M = 0.01
 
 # Parameters that only mean something for a time-stepped run.
 _TEMPORAL_ONLY_FIELDS = ("steps", "frame_interval", "outflow_fraction", "stop_at_peak")
+# Parameters that only mean something for a seeded-pool run - the other two
+# modes are driven by the gauge hydrograph, not by an initial pool.
+_SEEDED_POOL_ONLY_FIELDS = ("seed_volume", "seed_location")
+
+
+class SeedLocation(BaseModel):
+    """A WGS84 point; converted to a grid cell server-side, where the grid's real CRS is known."""
+
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
 
 
 class SimulationParams(BaseModel):
@@ -69,9 +88,16 @@ class SimulationParams(BaseModel):
     frame_interval: int | None = Field(default=None, gt=0)
     outflow_fraction: float = Field(default=DEFAULT_OUTFLOW_FRACTION, gt=0, le=1)
     stop_at_peak: bool = False
+    seed_volume: float = Field(default=DEFAULT_SEED_VOLUME, gt=0, le=MAX_SEED_VOLUME)
+    # None: seed at the terrain's lowest point, as before this parameter existed.
+    seed_location: SeedLocation | None = None
 
     @model_validator(mode="after")
     def _validate_fields_match_mode(self) -> "SimulationParams":
+        if self.mode != "seeded_pool":
+            given = [name for name in _SEEDED_POOL_ONLY_FIELDS if name in self.model_fields_set]
+            if given:
+                raise ValueError(f"{', '.join(given)} only applies when mode is 'seeded_pool'")
         if self.mode == "fast":
             given = [name for name in _TEMPORAL_ONLY_FIELDS if name in self.model_fields_set]
             if given:
@@ -104,9 +130,54 @@ class SimulationCreated(BaseModel):
     run_id: str
     grid_shape: tuple[int, int]
     bounds: Bounds
+    # seeded_pool only: the (row, col) the pool is centered on - the cell under
+    # seed_location, or the lowest-point default's own center. None otherwise.
+    seed_cell: tuple[int, int] | None = None
 
 
-_pending_runs: dict[str, SimulationParams] = {}
+class GridInfo(BaseModel):
+    resolution: int
+    grid_shape: tuple[int, int]
+    bounds: Bounds
+    # The grid's true outline as four WGS84 (lat, lon) corners, clockwise from the
+    # top-left. `bounds` is its axis-aligned envelope, which also covers thin
+    # slivers outside the (UTM north-up, so slightly rotated) grid.
+    footprint: list[tuple[float, float]]
+
+
+@dataclass
+class _PendingRun:
+    params: SimulationParams
+    # seeded_pool with a seed_location only; None seeds at the lowest point.
+    seed_cell: tuple[int, int] | None
+
+
+_pending_runs: dict[str, _PendingRun] = {}
+
+
+def _bounds(grid: Grid) -> Bounds:
+    west, south, east, north = grid.bounds
+    return Bounds(west=west, south=south, east=east, north=north)
+
+
+def _lowest_point_seed_cell(Z: np.ndarray) -> tuple[int, int]:
+    """The center `seed_pool_at_lowest_point` uses (same clipping), for reporting it."""
+    ry, rx = np.unravel_index(np.argmin(Z), Z.shape)
+    return int(np.clip(ry, 2, Z.shape[0] - 3)), int(np.clip(rx, 2, Z.shape[1] - 3))
+
+
+@router.get("/grids", response_model=list[GridInfo])
+def list_grids(grids: dict[int, Grid] = Depends(get_grids)) -> list[GridInfo]:
+    """The served grids, so a client can place things on them (e.g. a seed location) before any run."""
+    return [
+        GridInfo(
+            resolution=resolution,
+            grid_shape=grid.Z.shape,
+            bounds=_bounds(grid),
+            footprint=grid_footprint(grid.crs, grid.transform, grid.Z.shape),
+        )
+        for resolution, grid in sorted(grids.items())
+    ]
 
 
 @router.post("/simulations", response_model=SimulationCreated)
@@ -123,13 +194,27 @@ def create_simulation(
         )
 
     grid = grids[params.resolution]
+    seed_cell = None
+    if params.seed_location is not None:
+        location = params.seed_location
+        seed_cell = lonlat_to_cell(location.lon, location.lat, grid.crs, grid.transform, grid.Z.shape)
+        if seed_cell is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"seed_location ({location.lat}, {location.lon}) is outside the "
+                f"{params.resolution} m grid",
+            )
+
     run_id = str(uuid.uuid4())
-    _pending_runs[run_id] = params
-    west, south, east, north = grid.bounds
+    _pending_runs[run_id] = _PendingRun(params=params, seed_cell=seed_cell)
+    reported_seed_cell = None
+    if params.mode == "seeded_pool":
+        reported_seed_cell = seed_cell if seed_cell is not None else _lowest_point_seed_cell(grid.Z)
     return SimulationCreated(
         run_id=run_id,
         grid_shape=grid.Z.shape,
-        bounds=Bounds(west=west, south=south, east=east, north=north),
+        bounds=_bounds(grid),
+        seed_cell=reported_seed_cell,
     )
 
 
@@ -144,18 +229,30 @@ async def _yield_or_stop(client_gone: asyncio.Event) -> None:
 
 
 async def _run_seeded_pool(
-    websocket: WebSocket, params: SimulationParams, grid: Grid, client_gone: asyncio.Event
+    websocket: WebSocket,
+    params: SimulationParams,
+    grid: Grid,
+    seed_cell: tuple[int, int] | None,
+    client_gone: asyncio.Event,
 ) -> None:
     Z, N = grid.Z, grid.N
     H = np.zeros_like(Z)
-    seed_pool_at_lowest_point(Z, H, SEED_VOLUME)
-    initial_volume = H.sum()
+    if seed_cell is None:
+        seed_pool_at_lowest_point(Z, H, params.seed_volume)
+    else:
+        seed_pool_at(H, params.seed_volume, *seed_cell)
+    seed_volume = params.seed_volume
 
     for t in range(1, params.steps + 1):
         await _yield_or_stop(client_gone)
         H = step(Z, H, N, outflow_fraction=params.outflow_fraction)
         assert H.min() >= -1e-9, f"negative depth at step {t}: {H.min()}"
-        assert abs(H.sum() - initial_volume) < 1e-6, f"volume drifted at step {t}: {H.sum()} vs {initial_volume}"
+        # Closed system: the total is the requested seed volume at every step.
+        # Relative, like _run_gauge_driven's, since seed_volume now ranges up to
+        # MAX_SEED_VOLUME (4e-7 at the default 400, tighter than the old 1e-6).
+        assert abs(H.sum() - seed_volume) <= 1e-9 * max(1.0, seed_volume), (
+            f"volume drifted at step {t}: {H.sum()} vs {seed_volume}"
+        )
         if t % params.frame_interval == 0 or t == params.steps:
             await websocket.send_json({"step": t, "depth": H.tolist(), "volume": float(H.sum())})
 
@@ -228,8 +325,7 @@ async def _run_gauge_driven(
         t += 1
 
         assert H.min() >= -1e-9, f"negative depth at step {t}: {H.min()}"
-        # Relative, unlike _run_seeded_pool's absolute 1e-6: there the volume is a
-        # small fixed constant (SEED_VOLUME), here it grows to order 1e7 over
+        # Relative (as in _run_seeded_pool): the volume grows to order 1e7 over
         # 100k+ steps of real inflow, where float64 round-off alone can exceed an
         # absolute 1e-6 without anything actually being wrong.
         expected_volume = cumulative_inflow - cumulative_outflow
@@ -303,10 +399,11 @@ async def stream_simulation(
     # Popped rather than just read: a run can only be streamed once, matching
     # the "no persistence layer" decision - reconnecting with the same run_id
     # isn't a supported resume mechanism.
-    params = _pending_runs.pop(run_id, None)
-    if params is None:
+    pending = _pending_runs.pop(run_id, None)
+    if pending is None:
         await websocket.close(code=4004, reason="unknown run_id")
         return
+    params = pending.params
 
     await websocket.accept()
     grid = grids[params.resolution]
@@ -324,7 +421,7 @@ async def stream_simulation(
     watcher = asyncio.create_task(_watch_for_disconnect())
     try:
         if params.mode == "seeded_pool":
-            await _run_seeded_pool(websocket, params, grid, client_gone)
+            await _run_seeded_pool(websocket, params, grid, pending.seed_cell, client_gone)
         elif params.mode == "gauge_driven":
             await _run_gauge_driven(websocket, params, grid, hydrograph, client_gone)
         else:

@@ -1,5 +1,5 @@
 import { API_BASE_URL } from './config'
-import type { SimulationCreated, SimulationParams } from '../types/simulation'
+import type { GridInfo, SimulationCreated, SimulationParams } from '../types/simulation'
 
 export async function createSimulation(params: SimulationParams): Promise<SimulationCreated> {
   const response = await fetch(`${API_BASE_URL}/simulations`, {
@@ -13,5 +13,11 @@ export async function createSimulation(params: SimulationParams): Promise<Simula
     throw new Error(`POST /simulations failed (${response.status}): ${JSON.stringify(body)}`)
   }
 
+  return response.json()
+}
+
+export async function fetchGrids(): Promise<GridInfo[]> {
+  const response = await fetch(`${API_BASE_URL}/grids`)
+  if (!response.ok) throw new Error(`GET /grids failed (${response.status})`)
   return response.json()
 }

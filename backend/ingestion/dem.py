@@ -31,7 +31,9 @@ from pathlib import Path
 import numpy as np
 import rasterio
 from affine import Affine
+from rasterio.transform import rowcol
 from rasterio.warp import calculate_default_transform, reproject, Resampling, transform_bounds
+from rasterio.warp import transform as warp_transform
 
 from config import settings
 
@@ -198,3 +200,46 @@ def get_geographic_bounds(
     with rasterio.open(processed_path) as src:
         west, south, east, north = transform_bounds(src.crs, "EPSG:4326", *src.bounds)
     return west, south, east, north
+
+
+def get_georeference(processed_path: Path = settings.DEM_PROCESSED_PATH) -> tuple[str, Affine]:
+    """Return the processed grid's own CRS (as a string) and affine transform.
+
+    The exact georeference `Z`'s rows/cols live on - what `lonlat_to_cell` and
+    `grid_footprint` need to go between WGS84 map coordinates and grid cells.
+    """
+    with rasterio.open(processed_path) as src:
+        return src.crs.to_string(), src.transform
+
+
+def lonlat_to_cell(
+    lon: float, lat: float, crs: str, grid_transform: Affine, shape: tuple[int, int]
+) -> tuple[int, int] | None:
+    """Return the (row, col) of the grid cell containing a WGS84 point, or None if outside the grid.
+
+    Reprojects the point into the grid's own (projected) CRS and applies the inverse
+    affine transform. Deliberately not a linear interpolation over the grid's WGS84
+    bounding box (`get_geographic_bounds`): the grid is north-up in its UTM CRS, so in
+    lat/lon it is slightly rotated and its bounding box also covers thin slivers
+    outside it - the shortcut misplaces cells by up to a cell or two near the edges.
+    """
+    (x,), (y,) = warp_transform("EPSG:4326", crs, [lon], [lat])
+    row, col = rowcol(grid_transform, x, y)  # floor: the cell whose area contains the point
+    row, col = int(row), int(col)
+    rows, cols = shape
+    if not (0 <= row < rows and 0 <= col < cols):
+        return None
+    return row, col
+
+
+def grid_footprint(crs: str, grid_transform: Affine, shape: tuple[int, int]) -> list[tuple[float, float]]:
+    """Return the grid's four outer corners as WGS84 (lat, lon), clockwise from the top-left.
+
+    Its true outline on a web map, unlike `get_geographic_bounds`' axis-aligned
+    envelope. Straight edges between the corners are exact to well under a meter
+    over a few-km grid.
+    """
+    rows, cols = shape
+    corners = [grid_transform * (c, r) for c, r in ((0, 0), (cols, 0), (cols, rows), (0, rows))]
+    lons, lats = warp_transform(crs, "EPSG:4326", [x for x, _ in corners], [y for _, y in corners])
+    return list(zip(lats, lons))

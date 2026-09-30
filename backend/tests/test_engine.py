@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 import simulation.engine as engine
-from simulation.engine import compute_stable_dt, outflow_fraction_for_dt, seed_pool_at_lowest_point, step
+from simulation.engine import compute_stable_dt, outflow_fraction_for_dt, seed_pool_at, seed_pool_at_lowest_point, step
 
 
 def test_mass_conservation_and_nonnegative_depth():
@@ -577,3 +577,29 @@ def test_max_stable_substep_fraction_stays_at_the_real_data_validated_value():
     flooded = H > 1e-6
     roughness = np.abs(H[flooded] - neighbor_mean[flooded]).mean()
     assert roughness < 0.05, f"flat-water control regression: roughness={roughness:.5f}"
+
+
+def test_seed_pool_at_centers_a_5x5_patch_on_the_chosen_cell():
+    H = np.zeros((10, 10))
+
+    seed_pool_at(H, volume=50.0, row=4, col=6)
+
+    assert H.sum() == pytest.approx(50.0)
+    assert np.array_equal(np.argwhere(H > 0).min(axis=0), [2, 4])
+    assert np.array_equal(np.argwhere(H > 0).max(axis=0), [6, 8])
+
+
+def test_seed_pool_at_clips_the_patch_at_an_edge_instead_of_moving_it():
+    H = np.zeros((10, 10))
+
+    seed_pool_at(H, volume=50.0, row=0, col=9)
+
+    assert H.sum() == pytest.approx(50.0)
+    # The 3x3 corner remnant of the patch, still around (0, 9) - not shifted inward.
+    assert np.array_equal(np.argwhere(H > 0).min(axis=0), [0, 7])
+    assert np.array_equal(np.argwhere(H > 0).max(axis=0), [2, 9])
+
+
+def test_seed_pool_at_rejects_a_cell_outside_the_grid():
+    with pytest.raises(ValueError):
+        seed_pool_at(np.zeros((10, 10)), volume=50.0, row=10, col=0)

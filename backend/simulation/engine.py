@@ -368,3 +368,18 @@ def seed_pool_at_lowest_point(Z: np.ndarray, H: np.ndarray, volume: float) -> No
     rx = int(np.clip(rx, 2, Z.shape[1] - 3))
     patch = H[ry - 2: ry + 3, rx - 2: rx + 3]
     patch[:] = volume / patch.size
+
+
+def seed_pool_at(H: np.ndarray, volume: float, row: int, col: int) -> None:
+    """Seed the same 5x5 pool as `seed_pool_at_lowest_point`, centered on a
+    caller-chosen cell (e.g. a location clicked on the map), in place on `H`.
+
+    Near an edge the patch is clipped to the grid rather than moved inward, so
+    the pool stays centered on the chosen cell; `volume` is spread over however
+    many cells the clipped patch covers, so the total is `volume` either way.
+    """
+    rows, cols = H.shape
+    if not (0 <= row < rows and 0 <= col < cols):
+        raise ValueError(f"seed cell ({row}, {col}) is outside the {rows}x{cols} grid")
+    patch = H[max(row - 2, 0): min(row + 3, rows), max(col - 2, 0): min(col + 3, cols)]
+    patch[:] = volume / patch.size

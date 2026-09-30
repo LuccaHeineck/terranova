@@ -2,13 +2,16 @@ import time
 
 import numpy as np
 import pytest
+from affine import Affine
 from fastapi.testclient import TestClient
+from rasterio.warp import transform as warp_transform
 from starlette.websockets import WebSocketDisconnect
 
 from api.main import app
 from api.routers.simulations import get_grids, get_hydrograph
 from api.state import Grid
 from ingestion.hydrograph import Hydrograph
+from simulation.engine import seed_pool_at_lowest_point, step
 
 # Deliberately not using `with TestClient(app) as client:` - that would run
 # the app's real lifespan (build_elevation_matrix/build_roughness_matrix),
@@ -20,6 +23,10 @@ TEST_N = np.full((3, 3), 0.05)
 TEST_BOUNDS = (-51.99, -29.505, -51.93, -29.455)
 TEST_INFLOW_MASK = np.array([[False, True, False], [False, False, False], [False, False, False]])
 TEST_HYDROGRAPH = Hydrograph(elapsed_seconds=np.array([0.0, 10.0]), discharge_m3s=np.array([1.0, 1.0]))
+# The real 30m grid's georeference (SIRGAS 2000 / UTM 22S, top-left corner near
+# Lajeado), so seed-location tests go through a real lat/lon -> UTM reprojection.
+TEST_CRS = "EPSG:31982"
+TEST_TRANSFORM = Affine(30.0, 0.0, 404043.3, 0.0, -30.0, 6741197.92)
 
 
 def _grid(Z, N=None, inflow_mask=None, boundary_elevation=None, boundary_roughness=None, dx=30.0, bounds=TEST_BOUNDS):
@@ -31,6 +38,8 @@ def _grid(Z, N=None, inflow_mask=None, boundary_elevation=None, boundary_roughne
         N=np.full(Z.shape, 0.05) if N is None else N,
         dx=dx,
         bounds=bounds,
+        crs=TEST_CRS,
+        transform=Affine(dx, 0.0, TEST_TRANSFORM.c, 0.0, -dx, TEST_TRANSFORM.f),
         inflow_mask=TEST_INFLOW_MASK if inflow_mask is None else inflow_mask,
         boundary_elevation=boundary_elevation,
         boundary_roughness=boundary_roughness,
@@ -312,3 +321,124 @@ def test_stream_simulation_stops_computing_when_client_disconnects():
         pass
 
     assert time.perf_counter() - start < 5.0
+
+
+# --- seeded_pool: seed volume and seed location -----------------------------
+
+# Big enough for an interior 5x5 patch; a bowl whose lowest point (4, 4) is unambiguous.
+SEED_Z = np.add.outer((np.arange(9) - 4.0) ** 2, (np.arange(9) - 4.0) ** 2)
+
+
+def _latlon_of(transform, row: float, col: float) -> dict:
+    """WGS84 lat/lon of a fractional grid position, via the inverse of the path under test."""
+    x, y = transform * (col, row)
+    (lon,), (lat,) = warp_transform(TEST_CRS, "EPSG:4326", [x], [y])
+    return {"lat": lat, "lon": lon}
+
+
+@pytest.fixture
+def seed_grid():
+    grid = _grid(SEED_Z, inflow_mask=np.zeros(SEED_Z.shape, dtype=bool))
+    app.dependency_overrides[get_grids] = lambda: {30: grid}
+    try:
+        yield grid
+    finally:
+        app.dependency_overrides[get_grids] = lambda: TEST_GRIDS
+
+
+def _run_seeded(params: dict) -> tuple[dict, list[dict]]:
+    created = client.post("/simulations", json={"steps": 3, "frame_interval": 1, **params})
+    assert created.status_code == 200, created.text
+    with client.websocket_connect(f"/simulations/{created.json()['run_id']}/stream") as websocket:
+        frames = _receive_until_done(websocket)
+    return created.json(), frames
+
+
+def test_seeded_pool_default_is_unchanged(seed_grid):
+    """No seed fields: 400 at the lowest point, bit-for-bit what the route did before they existed."""
+    created, frames = _run_seeded({})
+
+    Z, N = seed_grid.Z, seed_grid.N
+    H = np.zeros_like(Z)
+    seed_pool_at_lowest_point(Z, H, 400.0)
+    for _ in range(3):
+        H = step(Z, H, N)
+    assert created["seed_cell"] == [4, 4]
+    assert np.array_equal(np.array(frames[-1]["depth"]), H)
+    assert all(frame["volume"] == pytest.approx(400.0) for frame in frames)
+
+
+def test_seeded_pool_custom_volume_is_conserved(seed_grid):
+    _, frames = _run_seeded({"seed_volume": 1234.5})
+
+    assert [frame["volume"] for frame in frames] == pytest.approx([1234.5] * 3)
+
+
+def test_seeded_pool_custom_location_centers_the_pool_on_that_cell(seed_grid):
+    # Cell (2, 6)'s center: off the lowest point, but far enough in for a whole 5x5 patch.
+    created, frames = _run_seeded({"seed_location": _latlon_of(seed_grid.transform, 2.5, 6.5), "steps": 1})
+
+    assert created["seed_cell"] == [2, 6]
+    depth = np.array(frames[0]["depth"])
+    assert np.unravel_index(np.argmax(depth), depth.shape) == (2, 6)
+    assert frames[0]["volume"] == pytest.approx(400.0)
+
+
+def test_seeded_pool_location_just_inside_a_cell_corner_maps_to_that_cell(seed_grid):
+    """The containing cell (floor), not the nearest cell center (round)."""
+    created, _ = _run_seeded({"seed_location": _latlon_of(seed_grid.transform, 3.02, 5.97)})
+
+    assert created["seed_cell"] == [3, 5]
+
+
+def test_seeded_pool_location_outside_the_grid_is_rejected(seed_grid):
+    # Half a cell past the grid's east edge.
+    response = client.post(
+        "/simulations",
+        json={"steps": 3, "frame_interval": 1, "seed_location": _latlon_of(seed_grid.transform, 4.5, 9.5)},
+    )
+
+    assert response.status_code == 422
+    assert "outside the 30 m grid" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("seed_volume", [0.0, -5.0, 10_000.1])
+def test_seeded_pool_rejects_out_of_range_volume(seed_volume):
+    response = client.post("/simulations", json={"steps": 3, "frame_interval": 1, "seed_volume": seed_volume})
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"mode": "gauge_driven", "frame_interval": 1, "seed_volume": 400.0},
+        {"mode": "gauge_driven", "frame_interval": 1, "seed_location": {"lat": -29.48, "lon": -51.96}},
+        {"mode": "fast", "seed_volume": 400.0},
+        {"mode": "fast", "seed_location": {"lat": -29.48, "lon": -51.96}},
+    ],
+)
+def test_seed_params_are_rejected_outside_seeded_pool_mode(params):
+    response = client.post("/simulations", json=params)
+
+    assert response.status_code == 422
+
+
+def test_non_seeded_runs_report_no_seed_cell():
+    response = client.post("/simulations", json={"mode": "fast"})
+
+    assert response.json()["seed_cell"] is None
+
+
+def test_list_grids_returns_every_served_grid_with_its_footprint():
+    response = client.get("/grids")
+
+    assert response.status_code == 200
+    grids = response.json()
+    assert [grid["resolution"] for grid in grids] == [30, 90]
+    assert grids[0]["grid_shape"] == [3, 3]
+    assert grids[0]["bounds"] == {"west": -51.99, "south": -29.505, "east": -51.93, "north": -29.455}
+    footprint = grids[0]["footprint"]
+    assert len(footprint) == 4
+    top_left = _latlon_of(TEST_TRANSFORM, 0, 0)
+    assert footprint[0] == pytest.approx([top_left["lat"], top_left["lon"]])

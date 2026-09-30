@@ -3,6 +3,13 @@ import type { SimulationParams } from './types/simulation'
 /** Mirrors the backend's DEFAULT_OUTFLOW_FRACTION (simulation/engine.py) - keep in sync by hand. */
 export const DEFAULT_OUTFLOW_FRACTION = 0.085
 
+/**
+ * Seeded-pool volume, summed cell depth (m): mirrors the backend's DEFAULT_SEED_VOLUME / MAX_SEED_VOLUME
+ * (api/routers/simulations.py) - keep in sync by hand.
+ */
+export const DEFAULT_SEED_VOLUME = 400
+export const MAX_SEED_VOLUME = 10_000
+
 /** Default frame interval of a gauge-driven run: 100k+ engine steps, so far coarser than a seeded pool's. */
 export const GAUGE_DRIVEN_FRAME_INTERVAL = 500
 

@@ -1011,6 +1011,105 @@ temporal run can now be shown again without re-running.
 - Wall-clock this session was ~2.5–6× slower than §18's uncontended benchmark. The desktop was
   CPU-loaded (~37% with the simulation idle), so the replay to the peak took 30.9 min.
 
+**Seed volume + click-to-place seeding (seeded-pool mode only).** Two items from the "Cheap" backlog below.
+Gauge-driven and fast mode are unchanged, and the transition rule is untouched.
+- **API** (`POST /simulations`):
+  - **`seed_volume`** replaces the hardcoded `SEED_VOLUME`. It is validated `0 < v ≤ 10,000` and defaults
+    to 400.0.
+    - The unit is the frames' own `volume` unit, summed cell depth (m), so the invariant reads straight
+      off the frames.
+    - 400 fills the 5×5 seed patch 16 m deep. The cap fills it 400 m deep; past that it is no longer a
+      pool.
+  - **`seed_location: {lat, lon}`** (WGS84) is optional. The backend converts it with the grid's real
+    georeference: reproject to the grid CRS (EPSG:31982), then the inverse affine transform, floored to
+    the containing cell (`ingestion/dem.py`'s `lonlat_to_cell`). A point outside the grid → 422.
+    Omitted → the lowest point, via the unchanged `seed_pool_at_lowest_point`.
+  - Sending either seed field in another mode → 422, following the fast mode's pattern for
+    temporal-only fields.
+  - The response's new `seed_cell` reports the cell the pool is centered on, the default included.
+  - `Grid` now carries `crs` and `transform`, read from the processed GeoTIFF (`get_georeference`).
+- **Why not a linear interpolation over the bounds:** the grid is north-up in UTM 22S, so in lat/lon it is
+  rotated by ~0.5°. Measured on the real 30m grid, the linear shortcut over the WGS84 envelope puts
+  **27,655 of 35,136 cell centers in the wrong cell, up to 2 cells off**. A test in `test_ingestion.py`
+  pins this down.
+- **Engine:** new `seed_pool_at(H, volume, row, col)`, the same 5×5 patch. Near an edge it is clipped to the
+  grid instead of shifted inward, so the pool stays centered on the chosen cell.
+- **Invariant:** every seeded-pool step asserts `|ΣH − seed_volume| ≤ 1e-9 · max(1, seed_volume)`. It is
+  relative (like gauge-driven's) because volumes now reach 10,000. At 400 the tolerance is 4e-7, tighter
+  than the old absolute 1e-6.
+- **New `GET /grids`** returns each served grid's shape, envelope `bounds` and true `footprint` (its four
+  corners in WGS84). The map needs the grid before the first run, both to take clicks and to reject clicks
+  outside it; bounds used to arrive only with a run.
+- **Frontend:**
+  - `ConfigPanel` gains a **Seed volume** field. Its hint gives the unit and the equivalent depth and m³
+    on the selected grid.
+  - A **Seed location** block reads "Lowest point of the terrain (default)" with no marker. With a marker
+    it shows the lat/lon and a Clear button.
+  - In seeded-pool mode the map draws the selected grid's footprint dashed and shows a crosshair.
+    - A click inside the footprint places or moves a rose marker, drawn in its own Leaflet pane above
+      the flood overlay.
+    - A click outside is ignored, with the notice "Outside the 30 m grid: click inside the dashed
+      outline." Clicks are ignored while a run is busy.
+  - Engine, scenario, grid and the marker moved into `hooks/useRunSetup.ts`. Its setters clear the marker
+    when the grid changes or the setup leaves seeded pool (fast engine, gauge-driven, or the replay
+    preset).
+  - `hooks/useGrids.ts` loads `/grids`, retrying while the API is unreachable.
+  - The log names the seed cell: "seeded 400 at row r, col c (the chosen location | the lowest point)".
+  - Before the first run the map frames the selected grid.
+- **§21 stale-state rules unchanged.** `isComparable` and the layers are untouched; the marker is form state
+  and never lives on a layer.
+- **Tests:** 25 new.
+  - `test_api.py` (14): default unchanged (bit-for-bit equal to a direct `seed_pool_at_lowest_point(…, 400)`
+    run), custom volume conserved, custom location centers the pool, a point just inside a cell corner
+    maps to that cell (floor, not round), out-of-grid → 422, seed fields rejected for gauge-driven/fast,
+    volume bounds, `seed_cell` null for fast, and `GET /grids`.
+  - `test_engine.py` (3): `seed_pool_at` centered, clipped at an edge, out of range.
+  - `test_ingestion.py` (8): round trip at corners and center, outside → None, the linear-shortcut
+    counterexample, footprint corners.
+  - Suite: **137/137**.
+- **Verified in a real browser** (Playwright + Chromium against real `uvicorn` + `npm run dev`, 30m grid);
+  all 24 scripted checks passed:
+  - **Placement accuracy.** A click at 35% across and 30% down the outline sent
+    (-29.471211, -51.967993). The API returned `seed_cell` (59, 70); an independent rasterio conversion
+    gives fractional (59.39, 70.09), the same cell.
+    - The step-1 frame's depth-weighted wet centroid was (58.99, 70.01), **0.016 cells** from `seed_cell`.
+    - On screen, the overlay's wet-pixel centroid was **(−0.07, +1.13) px from the marker, i.e. 0.02 /
+      0.31 cells** (a cell is 3.6 px at that zoom).
+  - **Mass:** every frame's volume was 400 (to 6e-14); with `seed_volume` 2000, 2000 (to 2e-13), same seed
+    cell.
+  - **Volume changes the flood:** 132 wet cells at step 5 with 2000, against 106 with 400.
+  - **Outside clicks:**
+    - a click west of the outline shows the notice and leaves the marker unmoved;
+    - a click in the envelope's top-left sliver is rejected too. It lies inside the overlay's rectangle
+      but outside the rotated footprint, and the API independently gives 422 for that sliver.
+    - the next valid click moves the marker and clears the notice.
+  - **Clearing rules:** gauge-driven, the fast engine and the 30 → 90 m grid switch each cleared the marker
+    (the outline also switches to the 90 m footprint), and so did Clear. With no marker the POST has no
+    `seed_location`, and the log reports the lowest point (47, 123), the DEM's `argmin`.
+  - **§21:**
+    - a seeded-pool run cleared the fast layer;
+    - fast @ 90m after a 30m run cleared the temporal layer;
+    - Stop kept a scrubbable temporal layer, and the marker.
+- **Found in the browser, not by `tsc`/lint:**
+  - **The map shifts ~53 px when the timeline strip first appears** (pre-existing). Leaflet's
+    `invalidateSize` keeps the center, so everything above it moves up by half the strip's height. The
+    marker moves with the map, so nothing is misplaced. But the first scripted accuracy check compared
+    the overlay against the pre-run click pixel and failed by exactly −52 px / 14 "cells" until it
+    measured against the marker instead. Left as is.
+  - The seed-volume hint sat inside its `<label>`, so the input's accessible name was the whole hint, and
+    `getByLabel('Grid')` matched it too because the hint mentions the grid. Moved out, and linked with
+    `aria-describedby`.
+  - Two failed checks were the driver's own fault: one clicked a sliver point under the view-selector
+    control, and one accepted a notice left over from an earlier click.
+- **Found by `tsc`:** a `readonly [number, number][]` → `L.LatLngTuple[]` cast Leaflet's types reject.
+  `oxlint` found nothing.
+- **Known limitation, reported rather than fixed:** the flood overlay is still an axis-aligned
+  `L.imageOverlay` stretched over the WGS84 envelope, which is the same linear shortcut. So the drawn
+  overlay can sit up to ~2 cells off its true position near the grid's edges. The seed itself is placed
+  exactly; only the picture is approximate. Near the grid's middle (the check above) the error is under a
+  cell. Fixing it means drawing the overlay in the grid's own projection (reprojected image or a rotated
+  overlay).
+
 To run the CA-engine PoC directly (bare-metal, unrelated to Docker): `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 
 To run the real end-to-end CSI validation against the May 2024 event (bare-metal, expect ~30 minutes):
@@ -1043,7 +1142,7 @@ backend/
   requirements.txt   # numpy, matplotlib, fastapi, uvicorn, pytest, httpx2, rasterio, requests, python-dotenv
   simulation/
     __init__.py
-    engine.py         # core CA step, compute_stable_dt, seed_pool_at_lowest_point — pure NumPy, no I/O
+    engine.py         # core CA step, compute_stable_dt, seed_pool_at_lowest_point / seed_pool_at — pure NumPy, no I/O
     fast_engine.py     # Torres-inspired non-temporal fast mode: classify_steady_flood (hybrid architecture, §19)
   examples/
     __init__.py
@@ -1054,14 +1153,14 @@ backend/
   api/
     __init__.py
     main.py             # FastAPI() app, lifespan loads the 30m + 90m grids and the hydrograph (best-effort), includes routers
-    state.py            # Grid bundle per resolution (Z/N/dx/bounds/inflow mask/outlet) + hydrograph, overridable dependencies
+    state.py            # Grid bundle per resolution (Z/N/dx/bounds/crs/transform/inflow mask/outlet) + hydrograph, overridable dependencies
     routers/
       __init__.py
       health.py         # GET /health -> {"status": "ok"}
-      simulations.py    # POST /simulations, WS /simulations/{run_id}/stream — seeded_pool, gauge_driven (+ stop_at_peak), fast (one frame)
+      simulations.py    # GET /grids, POST /simulations, WS /simulations/{run_id}/stream — seeded_pool (+ seed_volume/seed_location), gauge_driven (+ stop_at_peak), fast (one frame)
   ingestion/
     __init__.py
-    dem.py              # raw GeoTIFF -> reproject -> crop -> sink-fill -> Z array (step 3, resolution param since step 10)
+    dem.py              # raw GeoTIFF -> reproject -> crop -> sink-fill -> Z array (step 3, resolution param since step 10); lon/lat -> cell, footprint
     landcover.py         # raw MapBiomas GeoTIFF -> align to Z's grid -> Manning's-n lookup -> N array (step 4)
     hydrograph.py         # raw ANA XML -> real rating curve -> Hydrograph + boundary inflow mask (step 9)
     flood_extent.py        # raw SGB GeoJSON -> reproject -> rasterize -> observed flooded mask (step 10)
@@ -1098,19 +1197,23 @@ frontend/
     presets.ts                 # MAY_2024_REPLAY (the validated 90m fast + temporal-to-peak scenario), DEFAULT_OUTFLOW_FRACTION
     api/
       config.ts                 # API_BASE_URL / WS_BASE_URL (VITE_API_BASE_URL, default localhost:8000)
-      client.ts                  # createSimulation() -> POST /simulations
+      client.ts                  # createSimulation() -> POST /simulations, fetchGrids() -> GET /grids
       stream.ts                   # openSimulationStream() -> WebSocket wrapper (handles code 4004, disconnects)
     hooks/
       useSimulationRun.ts          # orchestration: idle -> starting -> streaming -> done|stopped|error, per-engine result layers (+ temporal frame buffer), May 2024 replay chain
       useTimeline.ts               # which buffered temporal frame is shown: follow live / paused at a step / 8 fps replay
+      useRunSetup.ts               # engine / scenario / grid + seed marker, shared by ConfigPanel and the map; clears the marker on grid/mode change
+      useGrids.ts                  # GET /grids once (retrying): each grid's shape, envelope and true footprint, before any run
+    geo/
+      footprint.ts                 # point-in-polygon against a grid footprint
     rendering/
       depthToImage.ts               # temporal: DEPTH_BANDS (fixed 6-band blue depth scale); fast: one flat extent color -> canvas data URL; flooded-cell and agreement counts (flat Float32Array grids)
       depthGrid.ts                  # DepthGrid (Float32Array in a private field) + CompactFrame; wire frame -> compact on arrival
       frameBuffer.ts                # bounded FrameBuffer of CompactFrames (32 MiB budget, stride-doubling decimation)
     components/
-      ConfigPanel.tsx                # "Replay May 2024 flood" preset; engine toggle (temporal/fast), grid, scenario + steps/frame_interval/outflow_fraction, Stop
+      ConfigPanel.tsx                # "Replay May 2024 flood" preset; engine toggle (temporal/fast), grid, scenario + steps/seed volume/seed location/frame_interval/outflow_fraction, Stop
       FloodMap.tsx                    # Temporal/Fast/Compare view selector; Compare = two synced MapPanes side by side, each with its own legend
-      MapPane.tsx                      # one plain Leaflet map: OSM tiles + L.ImageOverlay via API bounds + its legend, ResizeObserver-aware
+      MapPane.tsx                      # one plain Leaflet map: OSM tiles + L.ImageOverlay via API bounds + its legend, ResizeObserver-aware; seed marker, dashed grid footprint, click-to-place
       DepthLegend.tsx                   # depth -> color key with numeric ranges, read from DEPTH_BANDS (temporal pane)
       ExtentLegend.tsx                  # fast pane key: one flooded color, "extent only, depth not calibrated"
       LogPanel.tsx                     # status/grid_shape/bounds, temporal-vs-fast comparison block (at the timeline's frame), scrolling log, errors
@@ -1168,11 +1271,9 @@ enhancements — not committed to, not ordered, and not required for steps 7-11.
 they'd cost and whether they touch the TCC's documented model:
 
 **Cheap — UI/plumbing only, no engine or model changes:**
-- Expose seed volume as a real config-panel parameter (currently hardcoded `SEED_VOLUME = 400.0` in
-  `backend/api/routers/simulations.py`, not user-controllable at all).
-- Click-to-place seed location on the map, instead of always seeding at the terrain's lowest point
-  (`seed_pool_at_lowest_point` in `simulation/engine.py`) — needs a small API addition to accept a
-  start coordinate, but no change to the transition rule itself.
+- ~~Expose seed volume as a real config-panel parameter~~ and ~~click-to-place seed location on the map~~
+  *(done — `seed_volume` / `seed_location` on `POST /simulations`, placed through the grid's real UTM
+  transform, see "Seed volume + click-to-place seeding" in Current status)*.
 - Visual polish: ~~better depth→color ramp/legend~~ *(done — fixed 6-band blue scale with a numeric
   legend, see "Frontend visual polish" in Current status)*; still open: smoother frame-to-frame
   transitions, terrain shading under the flood overlay.

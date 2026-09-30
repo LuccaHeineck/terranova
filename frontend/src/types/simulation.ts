@@ -3,6 +3,12 @@ export type RunMode = 'seeded_pool' | 'gauge_driven' | 'fast'
 /** Served grid resolutions, in meters: the live grid and the validation grid. */
 export type Resolution = 30 | 90
 
+/** A WGS84 point, in degrees. */
+export interface LatLon {
+  lat: number
+  lon: number
+}
+
 export interface SimulationParams {
   mode?: RunMode
   resolution?: Resolution
@@ -11,6 +17,11 @@ export interface SimulationParams {
   frame_interval?: number
   outflow_fraction?: number
   stop_at_peak?: boolean
+  // Seeded-pool only - the backend rejects these for the other modes.
+  /** Summed cell depth (m), the frames' own `volume` unit. Default 400. */
+  seed_volume?: number
+  /** Where to center the pool; omitted seeds at the terrain's lowest point. */
+  seed_location?: LatLon
 }
 
 export interface Bounds {
@@ -24,6 +35,21 @@ export interface SimulationCreated {
   run_id: string
   grid_shape: [number, number]
   bounds: Bounds
+  /** Seeded-pool runs: the [row, col] the pool is centered on (the chosen cell, or the lowest point's). */
+  seed_cell?: [number, number] | null
+}
+
+/** One served grid, from GET /grids - known before any run. */
+export interface GridInfo {
+  resolution: Resolution
+  grid_shape: [number, number]
+  /** Axis-aligned WGS84 envelope: what the overlay image is stretched over. */
+  bounds: Bounds
+  /**
+   * The grid's true outline, four [lat, lon] corners clockwise from the top-left. The grid is north-up in
+   * UTM, so it is slightly rotated in lat/lon and `bounds` also covers thin slivers outside it.
+   */
+  footprint: [number, number][]
 }
 
 export interface SimulationFrame {

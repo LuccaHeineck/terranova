@@ -3,7 +3,17 @@ import pytest
 import rasterio
 from rasterio.transform import from_bounds
 
-from ingestion.dem import build_elevation_matrix, crop_nodata_border, fill_sinks, reproject_to_target_crs
+from affine import Affine
+from rasterio.warp import transform as warp_transform
+
+from ingestion.dem import (
+    build_elevation_matrix,
+    crop_nodata_border,
+    fill_sinks,
+    grid_footprint,
+    lonlat_to_cell,
+    reproject_to_target_crs,
+)
 
 
 def test_fill_sinks_removes_artificial_pit():
@@ -131,3 +141,51 @@ def test_build_elevation_matrix_honors_resolution_override(tmp_path):
 
     assert coarse.shape[0] < fine.shape[0]
     assert coarse.shape[1] < fine.shape[1]
+
+
+# A 30m UTM 22S grid at the real 30m grid's origin, larger than it (400x400 =
+# 12 km), so its ~0.5 deg rotation relative to lat/lon is several cells at the edges.
+UTM_CRS = "EPSG:31982"
+UTM_TRANSFORM = Affine(30.0, 0.0, 404043.3, 0.0, -30.0, 6741197.92)
+UTM_SHAPE = (400, 400)
+
+
+def _lonlat(row: float, col: float) -> tuple[float, float]:
+    x, y = UTM_TRANSFORM * (col, row)
+    (lon,), (lat,) = warp_transform(UTM_CRS, "EPSG:4326", [x], [y])
+    return lon, lat
+
+
+@pytest.mark.parametrize("cell", [(0, 0), (0, 399), (199, 200), (399, 0), (399, 399)])
+def test_lonlat_to_cell_round_trips_cell_centers(cell):
+    row, col = cell
+
+    assert lonlat_to_cell(*_lonlat(row + 0.5, col + 0.5), UTM_CRS, UTM_TRANSFORM, UTM_SHAPE) == cell
+
+
+def test_lonlat_to_cell_returns_none_outside_the_grid():
+    assert lonlat_to_cell(*_lonlat(-0.5, 10.5), UTM_CRS, UTM_TRANSFORM, UTM_SHAPE) is None
+    assert lonlat_to_cell(*_lonlat(10.5, 400.5), UTM_CRS, UTM_TRANSFORM, UTM_SHAPE) is None
+
+
+def test_lonlat_to_cell_differs_from_linear_interpolation_over_the_wgs84_envelope():
+    """Why the conversion reprojects: stretching the grid linearly over its lat/lon
+    bounding box (what an axis-aligned web-map overlay does) misplaces a corner
+    cell, because the UTM-north-up grid is rotated in lat/lon."""
+    footprint = grid_footprint(UTM_CRS, UTM_TRANSFORM, UTM_SHAPE)
+    lats = [lat for lat, _ in footprint]
+    lons = [lon for _, lon in footprint]
+    north, south, west, east = max(lats), min(lats), min(lons), max(lons)
+    lon, lat = _lonlat(0.5, 399.5)  # the top-right cell's center
+
+    linear_row = int((north - lat) / (north - south) * UTM_SHAPE[0])
+
+    assert lonlat_to_cell(lon, lat, UTM_CRS, UTM_TRANSFORM, UTM_SHAPE) == (0, 399)
+    assert linear_row >= 2  # the shortcut puts the top-right corner cell rows too far south
+
+
+def test_grid_footprint_corners_are_the_grid_corners_in_wgs84():
+    footprint = grid_footprint(UTM_CRS, UTM_TRANSFORM, UTM_SHAPE)
+
+    expected = [_lonlat(0, 0), _lonlat(0, 400), _lonlat(400, 400), _lonlat(400, 0)]
+    assert footprint == pytest.approx([(lat, lon) for lon, lat in expected])

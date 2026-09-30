@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createSimulation } from '../api/client'
 import { openSimulationStream } from '../api/stream'
-import { MAY_2024_REPLAY } from '../presets'
+import { DEFAULT_SEED_VOLUME, MAY_2024_REPLAY } from '../presets'
 import { toCompactFrame } from '../rendering/depthGrid'
 import type { CompactFrame } from '../rendering/depthGrid'
 import { appendFrame, createFrameBuffer } from '../rendering/frameBuffer'
@@ -147,6 +147,14 @@ export function useSimulationRun() {
         setGridShape(created.grid_shape)
         setBounds(created.bounds)
         setStatus('streaming')
+        if (created.seed_cell) {
+          const [row, col] = created.seed_cell
+          const where = params.seed_location ? 'the chosen location' : 'the lowest point'
+          setLog((prev) => [
+            ...prev.slice(-(MAX_LOG_LINES - 1)),
+            `seeded ${params.seed_volume ?? DEFAULT_SEED_VOLUME} at row ${row}, col ${col} (${where})`,
+          ])
+        }
 
         closeStreamRef.current = openSimulationStream(created.run_id, {
           onFrame: (frame) => {
