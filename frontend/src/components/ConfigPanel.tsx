@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import type { Resolution, SimulationParams } from '../types/simulation'
+import type { Neighborhood, Resolution, SimulationParams } from '../types/simulation'
 import type { SimulationStatus } from '../hooks/useSimulationRun'
 import type { RunSetup, TemporalScenario } from '../hooks/useRunSetup'
 import {
@@ -9,6 +9,8 @@ import {
   GAUGE_DRIVEN_FRAME_INTERVAL,
   MAX_SEED_VOLUME,
   MAY_2024_REPLAY,
+  VALIDATED_NEIGHBORHOOD_NOTE,
+  VON_NEUMANN_MAX_OUTFLOW_FRACTION,
 } from '../presets'
 
 interface ConfigPanelProps {
@@ -94,8 +96,17 @@ export function ConfigPanel({ status, setup, seedPlacementError, onStart, onRepl
   // On by default: the observed peak is the moment the fast mode models and the
   // real flood extent was mapped at. Off runs the whole ~14-day record.
   const [stopAtPeak, setStopAtPeak] = useState(true)
+  const [neighborhood, setNeighborhood] = useState<Neighborhood>('moore')
 
   const busy = status === 'starting' || status === 'streaming'
+
+  // von Neumann is only converged up to VON_NEUMANN_MAX_OUTFLOW_FRACTION (the backend rejects more), so
+  // switching to it brings a larger outflow fraction down to that bound.
+  const selectVonNeumann = () => {
+    setNeighborhood('von_neumann')
+    setOutflowFraction((f) => Math.min(f, VON_NEUMANN_MAX_OUTFLOW_FRACTION))
+  }
+  const maxOutflowFraction = neighborhood === 'von_neumann' ? VON_NEUMANN_MAX_OUTFLOW_FRACTION : 1
 
   const selectScenario = (next: TemporalScenario) => {
     setScenario(next)
@@ -112,6 +123,7 @@ export function ConfigPanel({ status, setup, seedPlacementError, onStart, onRepl
     setStopAtPeak(preset.stop_at_peak)
     setFrameInterval(preset.frame_interval)
     setOutflowFraction(preset.outflow_fraction)
+    setNeighborhood(preset.neighborhood)
     onReplay()
   }
 
@@ -126,6 +138,7 @@ export function ConfigPanel({ status, setup, seedPlacementError, onStart, onRepl
       resolution,
       frame_interval: frameInterval,
       outflow_fraction: outflowFraction,
+      neighborhood,
       ...(scenario === 'seeded_pool'
         ? { steps, seed_volume: seedVolume, ...(seed ? { seed_location: seed } : {}) }
         : { stop_at_peak: stopAtPeak }),
@@ -195,6 +208,33 @@ export function ConfigPanel({ status, setup, seedPlacementError, onStart, onRepl
         </p>
       ) : (
         <>
+          <fieldset className="flex flex-col gap-1 text-sm text-gray-700">
+            <legend className="mb-1 font-medium">Neighborhood</legend>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="neighborhood"
+                checked={neighborhood === 'moore'}
+                disabled={busy}
+                onChange={() => setNeighborhood('moore')}
+              />
+              Moore (8 neighbors), validated
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="neighborhood"
+                checked={neighborhood === 'von_neumann'}
+                disabled={busy}
+                onChange={selectVonNeumann}
+              />
+              von Neumann (4 neighbors), not validated
+            </label>
+            <span className={`text-xs ${neighborhood === 'moore' ? 'text-gray-500' : 'text-amber-800'}`}>
+              {VALIDATED_NEIGHBORHOOD_NOTE}
+            </span>
+          </fieldset>
+
           <fieldset className="flex flex-col gap-1 text-sm text-gray-700">
             <legend className="mb-1 font-medium">Scenario</legend>
             <label className="flex items-center gap-2">
@@ -292,14 +332,21 @@ export function ConfigPanel({ status, setup, seedPlacementError, onStart, onRepl
             <input
               type="number"
               min={0.01}
-              max={1}
+              max={maxOutflowFraction}
               step={0.005}
               value={outflowFraction}
               disabled={busy}
               onChange={(e) => setOutflowFraction(Number(e.target.value))}
+              aria-describedby={neighborhood === 'von_neumann' ? 'outflow-fraction-hint' : undefined}
               className={inputClass}
             />
           </label>
+          {neighborhood === 'von_neumann' && (
+            <span id="outflow-fraction-hint" className="-mt-3 text-xs text-gray-500">
+              At most {VON_NEUMANN_MAX_OUTFLOW_FRACTION} with von Neumann: above that its result depends on the
+              engine's substep size.
+            </span>
+          )}
         </>
       )}
 

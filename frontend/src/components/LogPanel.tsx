@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react'
+import { NEIGHBORHOOD_LABEL } from '../types/simulation'
 import type { Bounds } from '../types/simulation'
 import type { CompactFrame } from '../rendering/depthGrid'
 import type { ResultLayer, ResultLayers, SimulationStatus } from '../hooks/useSimulationRun'
@@ -76,6 +77,12 @@ function Comparison({ temporal, fast, temporalFrame, followingLatest }: Comparis
         </div>
       )}
       <div className="text-gray-500">Flooded means depth &gt; {FLOODED_DEPTH_THRESHOLD_M} m.</div>
+      {temporal.neighborhood !== fast.neighborhood && (
+        <div className="rounded border border-amber-300 bg-amber-50 p-1.5 text-amber-800">
+          Different neighborhoods: the temporal run used {NEIGHBORHOOD_LABEL[temporal.neighborhood]}; the fast engine
+          is {NEIGHBORHOOD_LABEL[fast.neighborhood]}-based. The validated agreement numbers are for Moore only.
+        </div>
+      )}
       {!reachedPeak && (
         <div className="rounded border border-amber-300 bg-amber-50 p-1.5 text-amber-800">
           The temporal run is at t={elapsedHours.toFixed(1)} h of the {peakHours.toFixed(1)} h to the peak that the fast

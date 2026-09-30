@@ -59,7 +59,13 @@ from ingestion.hydrograph import (
     load_raw_stage_series,
 )
 from ingestion.landcover import build_roughness_matrix
-from simulation.engine import compute_stable_dt, outflow_fraction_for_dt, step
+from simulation.engine import (
+    NEIGHBORHOODS,
+    VON_NEUMANN_MAX_OUTFLOW_FRACTION,
+    compute_stable_dt,
+    outflow_fraction_for_dt,
+    step,
+)
 from validation.metrics import csi, false_alarm_rate, hit_rate
 
 # A cell counts as "flooded" above this depth - a documented wet-cell cutoff
@@ -220,6 +226,7 @@ def _run_to_peak(
     results_json: Path | None = None,
     save_masks: Path | None = None,
     depth_png: Path | None = None,
+    neighborhood: str = "moore",
 ) -> None:
     """`outlet_drop_m` overrides `find_boundary_outlet`'s `drop_m` (the outlet's
     fixed drainage margin) when given - a single, isolated lever for exploratory
@@ -301,7 +308,7 @@ def _run_to_peak(
         # dt_cfl kept separate from the capped dt below, mirroring
         # api/routers/simulations.py::_run_gauge_driven - see that function's
         # comment and simulation.engine.outflow_fraction_for_dt's docstring.
-        dt_cfl = compute_stable_dt(Z, H, N, dx)
+        dt_cfl = compute_stable_dt(Z, H, N, dx, neighborhood=neighborhood)
         dt = min(dt_cfl, 900.0)  # raw feed's own typical sample spacing - see _run_gauge_driven's comment
         dt = min(dt, peak_elapsed_seconds - elapsed_time)  # land exactly on the peak, never past it
 
@@ -317,6 +324,7 @@ def _run_to_peak(
             inflow=inflow,
             boundary_elevation=boundary_elevation,
             boundary_roughness=boundary_roughness,
+            neighborhood=neighborhood,
         )
         cumulative_outflow += volume_before + inflow.sum() - H.sum()
         elapsed_time += dt
@@ -384,6 +392,7 @@ def _run_to_peak(
                 {
                     "outlet_drop_m": outlet_drop_m,
                     "outflow_fraction": base_outflow_fraction,
+                    "neighborhood": neighborhood,
                     "seed_baseflow_depth": seed_baseflow_depth,
                     "csi": csi_value,
                     "hit_rate": hit_rate_value,
@@ -489,6 +498,15 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Save a quick imshow of the final depth field to this PNG path (visual stability check).",
     )
+    parser.add_argument(
+        "--neighborhood",
+        choices=list(NEIGHBORHOODS),
+        default="moore",
+        help=(
+            "Engine neighborhood (default moore, the TCC's and the only validated one). von_neumann is the "
+            "optional 4-neighbor variant compared in docs/tcc-deviations.md section 22."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -509,6 +527,14 @@ def main() -> None:
         "(TCC-documented peak: 33.66m)"
     )
 
+    outflow_fraction = args.outflow_fraction if args.outflow_fraction is not None else _STEP10_BASELINE_OUTFLOW_FRACTION
+    if args.neighborhood == "von_neumann" and outflow_fraction > VON_NEUMANN_MAX_OUTFLOW_FRACTION:
+        print(
+            f"WARNING: outflow_fraction={outflow_fraction} is above VON_NEUMANN_MAX_OUTFLOW_FRACTION="
+            f"{VON_NEUMANN_MAX_OUTFLOW_FRACTION}: von Neumann's result there depends on the substep fraction "
+            "(docs/tcc-deviations.md section 22). Exploratory only - the API refuses this combination."
+        )
+
     _run_to_peak(
         peak_elapsed_seconds,
         outlet_drop_m=args.outlet_drop_m,
@@ -517,6 +543,7 @@ def main() -> None:
         results_json=args.results_json,
         save_masks=args.save_masks,
         depth_png=args.depth_png,
+        neighborhood=args.neighborhood,
     )
 
 

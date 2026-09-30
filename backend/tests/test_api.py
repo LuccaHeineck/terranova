@@ -218,7 +218,14 @@ def test_create_simulation_rejects_unserved_resolution():
 
 @pytest.mark.parametrize(
     "extra",
-    [{"steps": 5}, {"frame_interval": 1}, {"outflow_fraction": 0.1}, {"stop_at_peak": True}],
+    [
+        {"steps": 5},
+        {"frame_interval": 1},
+        {"outflow_fraction": 0.1},
+        {"stop_at_peak": True},
+        {"neighborhood": "moore"},
+        {"neighborhood": "von_neumann"},
+    ],
 )
 def test_create_simulation_rejects_temporal_params_with_fast_mode(extra):
     response = client.post("/simulations", json={"mode": "fast", **extra})
@@ -442,3 +449,50 @@ def test_list_grids_returns_every_served_grid_with_its_footprint():
     assert len(footprint) == 4
     top_left = _latlon_of(TEST_TRANSFORM, 0, 0)
     assert footprint[0] == pytest.approx([top_left["lat"], top_left["lon"]])
+
+
+# --- neighborhood (temporal engine only) ------------------------------------------------------------------
+
+
+def test_explicit_moore_neighborhood_streams_the_same_frames_as_the_default(seed_grid):
+    _, default_frames = _run_seeded({})
+    _, moore_frames = _run_seeded({"neighborhood": "moore"})
+
+    assert [f["depth"] for f in moore_frames] == [f["depth"] for f in default_frames]
+
+
+def test_von_neumann_seeded_pool_streams_and_conserves_mass(seed_grid):
+    _, moore_frames = _run_seeded({})
+    _, frames = _run_seeded({"neighborhood": "von_neumann"})
+
+    assert all(frame["volume"] == pytest.approx(400.0) for frame in frames)
+    assert frames[-1]["depth"] != moore_frames[-1]["depth"]
+
+
+def test_von_neumann_gauge_driven_keeps_its_volume_balance():
+    run_id = client.post(
+        "/simulations", json={"mode": "gauge_driven", "frame_interval": 1, "neighborhood": "von_neumann"}
+    ).json()["run_id"]
+
+    with client.websocket_connect(f"/simulations/{run_id}/stream") as websocket:
+        frames = _receive_until_done(websocket)
+
+    assert frames[-1]["volume"] == pytest.approx(frames[-1]["cumulative_inflow"] - frames[-1]["cumulative_outflow"])
+
+
+def test_create_simulation_rejects_an_unknown_neighborhood():
+    response = client.post("/simulations", json={"steps": 3, "frame_interval": 1, "neighborhood": "hexagonal"})
+
+    assert response.status_code == 422
+
+
+def test_von_neumann_rejects_an_outflow_fraction_above_its_verified_range():
+    from simulation.engine import VON_NEUMANN_MAX_OUTFLOW_FRACTION
+
+    base = {"steps": 3, "frame_interval": 1, "neighborhood": "von_neumann"}
+    assert client.post("/simulations", json={**base, "outflow_fraction": VON_NEUMANN_MAX_OUTFLOW_FRACTION}).status_code == 200
+    too_high = client.post("/simulations", json={**base, "outflow_fraction": VON_NEUMANN_MAX_OUTFLOW_FRACTION + 0.01})
+    assert too_high.status_code == 422
+    # Moore is not restricted.
+    moore = {"steps": 3, "frame_interval": 1, "outflow_fraction": 0.5}
+    assert client.post("/simulations", json=moore).status_code == 200

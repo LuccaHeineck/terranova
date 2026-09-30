@@ -1,5 +1,16 @@
 export type RunMode = 'seeded_pool' | 'gauge_driven' | 'fast'
 
+/**
+ * The temporal engine's neighborhood: Moore (8 neighbors) is the TCC's model and the only validated one;
+ * von Neumann (4 orthogonal neighbors) is an unvalidated option (docs/tcc-deviations.md section 22).
+ */
+export type Neighborhood = 'moore' | 'von_neumann'
+
+export const NEIGHBORHOOD_LABEL: Record<Neighborhood, string> = {
+  moore: 'Moore',
+  von_neumann: 'von Neumann',
+}
+
 /** Served grid resolutions, in meters: the live grid and the validation grid. */
 export type Resolution = 30 | 90
 
@@ -17,6 +28,7 @@ export interface SimulationParams {
   frame_interval?: number
   outflow_fraction?: number
   stop_at_peak?: boolean
+  neighborhood?: Neighborhood
   // Seeded-pool only - the backend rejects these for the other modes.
   /** Summed cell depth (m), the frames' own `volume` unit. Default 400. */
   seed_volume?: number

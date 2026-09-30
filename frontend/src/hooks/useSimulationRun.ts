@@ -6,7 +6,8 @@ import { toCompactFrame } from '../rendering/depthGrid'
 import type { CompactFrame } from '../rendering/depthGrid'
 import { appendFrame, createFrameBuffer } from '../rendering/frameBuffer'
 import type { FrameBuffer } from '../rendering/frameBuffer'
-import type { Bounds, Resolution, RunMode, SimulationFrame, SimulationParams } from '../types/simulation'
+import { NEIGHBORHOOD_LABEL } from '../types/simulation'
+import type { Bounds, Neighborhood, Resolution, RunMode, SimulationFrame, SimulationParams } from '../types/simulation'
 
 export type SimulationStatus = 'idle' | 'starting' | 'streaming' | 'done' | 'stopped' | 'error'
 
@@ -16,6 +17,8 @@ export type Engine = 'temporal' | 'fast'
 export interface ResultLayer {
   mode: RunMode
   resolution: Resolution
+  /** The temporal run's neighborhood; always 'moore' for a fast layer (the fast engine is Moore-only). */
+  neighborhood: Neighborhood
   /** The newest frame (for a temporal run, the tail of `history`). */
   frame: CompactFrame | null
   /**
@@ -61,8 +64,13 @@ function logLine(mode: RunMode, frame: SimulationFrame): string {
 }
 
 /** A layer for a run that has started (or, in a replay, is queued) but has no frame yet. */
-function pendingLayer(mode: RunMode, resolution: Resolution): ResultLayer {
-  return { mode, resolution, frame: null, history: null, wallClockSeconds: 0, finished: false }
+function pendingLayer(mode: RunMode, resolution: Resolution, neighborhood: Neighborhood): ResultLayer {
+  return { mode, resolution, neighborhood, frame: null, history: null, wallClockSeconds: 0, finished: false }
+}
+
+/** A temporal run's neighborhood as sent (the backend's default is Moore); fast runs are Moore-only. */
+function neighborhoodOf(params: SimulationParams): Neighborhood {
+  return params.mode === 'fast' ? 'moore' : (params.neighborhood ?? 'moore')
 }
 
 interface RunOptions {
@@ -125,6 +133,7 @@ export function useSimulationRun() {
       const mode = params.mode ?? 'seeded_pool'
       const resolution = params.resolution ?? 30
       const engine = engineOf(mode)
+      const neighborhood = neighborhoodOf(params)
       const other: Engine = engine === 'fast' ? 'temporal' : 'fast'
 
       setStatus('starting')
@@ -136,7 +145,7 @@ export function useSimulationRun() {
       // This engine's previous result goes now, replaced by a pending layer (so its pane exists from the start);
       // the other engine's result stays only if it's still a like-for-like comparison.
       setLayers((prev) => ({
-        [engine]: pendingLayer(mode, resolution),
+        [engine]: pendingLayer(mode, resolution, neighborhood),
         [other]: prev[other] && isComparable(prev[other], mode, resolution) ? prev[other] : null,
       }) as ResultLayers)
       startedAtRef.current = performance.now()
@@ -147,6 +156,13 @@ export function useSimulationRun() {
         setGridShape(created.grid_shape)
         setBounds(created.bounds)
         setStatus('streaming')
+        if (engine === 'temporal') {
+          const note = neighborhood === 'moore' ? '' : ' (not validated)'
+          setLog((prev) => [
+            ...prev.slice(-(MAX_LOG_LINES - 1)),
+            `temporal CA: ${NEIGHBORHOOD_LABEL[neighborhood]} neighborhood${note}`,
+          ])
+        }
         if (created.seed_cell) {
           const [row, col] = created.seed_cell
           const where = params.seed_location ? 'the chosen location' : 'the lowest point'
@@ -218,7 +234,7 @@ export function useSimulationRun() {
   const startReplay = useCallback(() => {
     const { fast, temporal } = MAY_2024_REPLAY
     setReplayActive(true)
-    setLayers({ temporal: pendingLayer(temporal.mode, temporal.resolution), fast: null })
+    setLayers({ temporal: pendingLayer(temporal.mode, temporal.resolution, temporal.neighborhood), fast: null })
     void run(fast, { onDone: () => void run(temporal, { keepLog: true }) })
   }, [run])
 

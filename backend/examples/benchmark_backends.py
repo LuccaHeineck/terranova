@@ -73,6 +73,10 @@ def _load_grid(resolution: int):
 
 
 def run(args: argparse.Namespace) -> None:
+    if args.substep_fraction is not None:
+        name = "_MAX_STABLE_SUBSTEP_FRACTION_VON_NEUMANN" if args.neighborhood == "von_neumann" else "_MAX_STABLE_SUBSTEP_FRACTION"
+        setattr(engine, name, args.substep_fraction)
+    print(f"neighborhood={args.neighborhood} max substep fraction={engine._max_stable_substep_fraction(args.neighborhood)}")
     if args.backend == "cupy":
         import cupy as xp
 
@@ -112,17 +116,25 @@ def run(args: argparse.Namespace) -> None:
     substeps = Counter()
     step_times = []
     snapshot_steps = set(args.snapshot_steps)
+    # Time-matched snapshots: runs with different dt trajectories reach a given step at different simulated
+    # times, so comparing them step-for-step compares different moments (docs/tcc-deviations.md section 22).
+    pending_snapshot_days = sorted(args.snapshot_days)
+    stop_seconds = args.stop_days * 86400 if args.stop_days is not None else None
     t = 0
 
     sync()
     start = time.perf_counter()
-    while elapsed_time < peak_elapsed_seconds and (args.max_steps is None or t < args.max_steps):
+    while (
+        elapsed_time < peak_elapsed_seconds
+        and (args.max_steps is None or t < args.max_steps)
+        and (stop_seconds is None or elapsed_time < stop_seconds)
+    ):
         step_start = time.perf_counter()
-        dt_cfl = compute_stable_dt(Z, H, N, dx)
+        dt_cfl = compute_stable_dt(Z, H, N, dx, neighborhood=args.neighborhood)
         dt = min(dt_cfl, 900.0)
         dt = min(dt, peak_elapsed_seconds - elapsed_time)
         f_eff = outflow_fraction_for_dt(args.outflow_fraction, dt, dt_cfl)
-        substeps[math.ceil(f_eff / engine._MAX_STABLE_SUBSTEP_FRACTION)] += 1
+        substeps[math.ceil(f_eff / engine._max_stable_substep_fraction(args.neighborhood))] += 1
 
         discharge = hydrograph.discharge_at(elapsed_time)
         if args.backend == "cupy":
@@ -143,9 +155,16 @@ def run(args: argparse.Namespace) -> None:
             inflow=inflow,
             boundary_elevation=boundary_elevation,
             boundary_roughness=boundary_roughness,
+            neighborhood=args.neighborhood,
         )
         elapsed_time += dt
         t += 1
+        if args.perturb_ulp and t == 1:
+            # Noise-floor control (section 18's ulp sensitivity): nudge the deepest cell by one ulp.
+            H_host = to_host(H).copy()
+            idx = np.unravel_index(np.argmax(H_host), H_host.shape)
+            H_host[idx] = np.nextafter(H_host[idx], np.inf)
+            H = to_device(H_host)
 
         if check:
             volume_after = float(H.sum())
@@ -162,8 +181,21 @@ def run(args: argparse.Namespace) -> None:
         sync()
         step_times.append(time.perf_counter() - step_start)
 
+        while pending_snapshot_days and elapsed_time >= pending_snapshot_days[0] * 86400 and args.snapshot_dir:
+            day = pending_snapshot_days.pop(0)
+            out = Path(args.snapshot_dir) / (
+                f"H_{args.backend}_{dx:.0f}m_f{args.outflow_fraction}_{args.neighborhood}"
+                f"_s{engine._max_stable_substep_fraction(args.neighborhood)}_day{day}.npy"
+            )
+            out.parent.mkdir(parents=True, exist_ok=True)
+            np.save(out, to_host(H))
+            print(f"  snapshot day {day}: step {t}, elapsed={elapsed_time / 86400:.4f}d")
+
         if t in snapshot_steps and args.snapshot_dir:
-            out = Path(args.snapshot_dir) / f"H_{args.backend}_{dx:.0f}m_f{args.outflow_fraction}_step{t}.npy"
+            out = Path(args.snapshot_dir) / (
+                f"H_{args.backend}_{dx:.0f}m_f{args.outflow_fraction}_{args.neighborhood}"
+                f"_s{engine._max_stable_substep_fraction(args.neighborhood)}_step{t}.npy"
+            )
             out.parent.mkdir(parents=True, exist_ok=True)
             np.save(out, to_host(H))
 
@@ -209,10 +241,21 @@ def main() -> None:
     parser.add_argument("--outflow-fraction", type=float, default=engine.DEFAULT_OUTFLOW_FRACTION)
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--backend", choices=["numpy", "cupy"], default="numpy")
+    parser.add_argument("--neighborhood", choices=list(engine.NEIGHBORHOODS), default="moore")
+    parser.add_argument(
+        "--substep-fraction", type=float, default=None,
+        help="Exploratory: override the chosen neighborhood's max stable substep fraction for this run only "
+             "(the von Neumann stability sweep, docs/tcc-deviations.md section 22). Omit for the engine's value.",
+    )
     parser.add_argument("--assert-every", type=int, default=1,
                         help="mass/negativity check cadence; >1 skips per-step host syncs")
     parser.add_argument("--snapshot-steps", type=int, nargs="*", default=[])
     parser.add_argument("--snapshot-dir", type=str, default=None)
+    parser.add_argument("--snapshot-days", type=float, nargs="*", default=[],
+                        help="Also snapshot H at the first step reaching each of these simulated days.")
+    parser.add_argument("--stop-days", type=float, default=None, help="Stop once this many simulated days elapse.")
+    parser.add_argument("--perturb-ulp", action="store_true",
+                        help="Noise-floor control: after step 1, move the deepest cell's depth up by one ulp.")
     parser.add_argument("--save-final", type=str, default=None)
     run(parser.parse_args())
 

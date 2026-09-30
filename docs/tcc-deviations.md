@@ -164,8 +164,9 @@ neighborhood type), a Leaflet map (OpenStreetMap base layer)... log/metrics pane
   - "Rainfall/volume params" → not built; rain input is a known, deliberately deferred idea (see
     section 9) needing an advisor conversation before it's added, since it touches the TCC's documented
     closed-system base model.
-  - "Neighborhood type" (Moore vs. von Neumann) → not built; the engine is Moore-only. Listed as a
-    possible future feature, not committed.
+  - "Neighborhood type" (Moore vs. von Neumann) → built later for the temporal engine (§22). Moore stays
+    the default and the only validated neighborhood; von Neumann is an explicitly unvalidated option, and the
+    fast engine is Moore-only.
 - **Client-side depth-to-image rendering**, mirroring the API's JSON-not-PNG decision above — no
   backend image-encoding work was ever added.
 
@@ -477,8 +478,8 @@ regardless of run order.
   + client-side rendering used instead (see sections 5-6).
 - **Rainfall/volume config-panel input** — named explicitly in TCC1's frontend section, deliberately
   deferred pending an advisor conversation about scope (see section 9).
-- **Neighborhood-type (Moore/von Neumann) toggle** — named explicitly in TCC1's frontend section, not
-  built; engine is Moore-only.
+- ~~**Neighborhood-type (Moore/von Neumann) toggle**~~ — named explicitly in TCC1's frontend section.
+  *Since built for the temporal engine (§22); Moore remains the validated default.*
 - **Automated pytest suite (70 tests across engine/ingestion/validation/API, as of step 10)** — not something TCC1
   describes at all; TCC1's own informal PoC validation was print-statement/manual-inspection based
   (Quadro 6's metrics table). Worth mentioning in the write-up as a methodological upgrade in TCC II
@@ -1042,6 +1043,201 @@ those depths would suggest a precision the engine doesn't have. The API is uncha
 still carries the depth grid, which is what `flooded_cells` and the agreement counts are computed from.
 The same follow-up added a one-click "Replay May 2024 flood" preset. It runs this section's comparison
 (fast, then temporal to the peak, on the 90m grid) exactly as scored above.
+
+---
+
+## 22. Von Neumann (4-neighbor) option for the temporal engine — built, unvalidated, Moore stays the default
+
+**TCC1:** the transition rule is documented over the 8-cell **Moore** neighborhood (`docs/tcc-summary.md`),
+and TCC1's frontend section also names a Moore / von Neumann "neighborhood type" setting (§6, §14).
+
+**What was built:**
+- `step()` and `compute_stable_dt()` take `neighborhood="moore"` (the default) or `"von_neumann"` (the 4
+  orthogonal neighbors).
+  - The CFL search uses the same neighbors as the redistribution, so it only sees slopes water can
+    actually flow down under that neighborhood.
+  - `POST /simulations` exposes it for the temporal modes only. With `mode: "fast"` it is a 422, like
+    the other temporal-only fields; the fast engine stays Moore-only.
+  - The config panel has a Neighborhood toggle labelled "Moore (8 neighbors), validated" / "von Neumann
+    (4 neighbors), not validated", with the note that the validated May 2024 results apply to Moore only.
+  - The May 2024 replay preset sends `neighborhood: "moore"` explicitly.
+  - Von Neumann is limited to `outflow_fraction ≤ 0.085`, the range where its numerics were measured
+    as sound (see Stability below). The API rejects it above that, and the UI clamps and caps the input.
+  - A von Neumann run is named on the temporal pane and in the log. Compare warns when the temporal run's
+    neighborhood differs from the (Moore-based) fast engine's.
+
+**Why the default is untouched, and how that was proved.** §18 found that the engine amplifies a single-ulp
+difference into ~0.2 m within ~50 steps, so "unchanged" has to mean bit-identical, not `allclose`.
+- **Construction:** the Moore path keeps the same offsets list in the same order, so it performs the same
+  floating-point operations in the same order.
+- **Regression test:** `tests/test_engine_regression.py` runs the live engine against
+  `tests/engine_moore_reference.py`, a verbatim frozen copy of `engine.py` from before the change, checked
+  with `diff`. Both are driven through the full gauge-driven macro step (CFL dt, 900 s cap,
+  `outflow_fraction_for_dt`, boundary inflow, outlet). It asserts exact equality of `H` and `dt` at every
+  step:
+  - over 500 synthetic steps;
+  - over 1,000 real May 2024 steps on the 90m grid;
+  - both with no argument and with an explicit `"moore"`.
+
+  A mutation check (only reversing the Moore offsets' order, i.e. the same math summed differently) fails
+  it at step 2, with a 1.1e-16 difference.
+- **Offline re-validation:** the May 2024 run to the peak (`validate_may2024 --outflow-fraction 0.085`) was
+  run before and after the change:
+
+  | | before | after |
+  |---|---|---|
+  | macro steps | 134,639 | 134,639 |
+  | naive TP / FP / FN | 789 / 1,166 / 42 | 789 / 1,166 / 42 |
+  | naive CSI | 0.3951 | 0.3951 |
+  | Estrela-gap-only TP / FP / FN | 789 / 47 / 42 | 789 / 47 / 42 |
+  | gap-only CSI | 0.8986 | 0.8986 |
+
+  The final `H` arrays and the masks are identical (`np.array_equal`).
+  - This reproduces §18's naive counts exactly.
+  - §16.4's documented 0.8997 (FP 1,167 → 46) is the one-cell variant §18 already noted. It comes from
+    before this change and does not come from it.
+
+**Isotropy: what the 4-neighbor stencil does to the spread shape.** On a flat grid with a point source:
+- **The stencil itself:** with one substep per step, water reaches exactly the L∞ ball (a square) under Moore
+  and exactly the L1 ball (a diamond) under von Neumann after k steps.
+- **The spreading front** (the tail at 1e-9 of the peak depth, 20 steps at the default):
+  - Moore's contour is octagon-like: it fills 0.87 of its bounding square, with diagonal reach 0.75 of
+    axial.
+  - von Neumann's leans to a diamond: 0.65 and 0.64.
+- **The bulk** (1% of the peak, 80 steps) is near-round under both (fill 0.77–0.80, a disc being 0.785). The
+  engine's many substeps per step diffuse the stencil's anisotropy out of the core.
+- So a von Neumann flood is diamond-like only at its fringe, not in its bulk. The tests assert the front
+  difference and the round bulk, not a bulk diamond.
+
+**Stability on real terrain (the §13 rule).** The substep fraction was not assumed from Moore's 0.01. The
+question turned out to need a better method than §13's, and the answer depends on `outflow_fraction`.
+
+- **1. Visual and scalar checks at the live default are clean, but they can't be trusted alone.**
+  - At 0.01, von Neumann is visually smooth: 90m snapshots every 20k steps to the peak, a 30m 10k-step
+    segment, and cell-level zooms, with no speckle, mottling or odd/even checkerboard.
+  - Scalar metrics agree:
+    - §18's isolated-extremum fraction is 0.16–0.24, against Moore's 0.19–0.29. Its definition was
+      recovered by reproducing §18's 18.7% on the Moore peak: extrema over the 4 orthogonal neighbors,
+      among cells with those neighbors wet (18.72%).
+    - The orthogonal/diagonal deviation ratio, which rises for odd/even decoupling, is 0.66 for both.
+  - **But the positive control failed.** Moore at 0.02, §13's known-bad setting, scores the same on every
+    metric at the live default, and looks clean too. At `outflow_fraction=0.085` it is only 5 substeps per
+    step, not the 25 of §13's `0.5` regime.
+- **2. Step-matched snapshots compare different moments.** In §13's own regime (`outflow_fraction=0.5`),
+  runs with different substep fractions take different dt trajectories. So "step 60,000" is 4.47 d in one
+  run and 4.70 d in another.
+  - The dendritic eastern tributary lobe that Moore 0.02 floods by 4.05 d also floods in the clean 0.01
+    run, but between 4.70 and 5.10 d.
+  - The real defect of 0.02 is flooding it about 0.7 d early. The "branching artifact at step 60k" of §13
+    is partly a timing mismatch between the runs compared.
+  - `examples/benchmark_backends.py` therefore gained `--snapshot-days`/`--stop-days` (time-matched
+    snapshots) and `--perturb-ulp`, a noise-floor control that nudges the deepest cell by one ulp after
+    step 1.
+- **3. The test that works: convergence in the substep fraction, at matched simulated times, above a
+  noise floor.**
+
+  | wet-mask cells that differ, days 3.0 → 4.7 (`outflow_fraction=0.5`, 90m) | cells |
+  |---|---|
+  | noise floor, Moore 0.01 vs. 1-ulp perturbed / von Neumann likewise | 0–2 / 0–2 |
+  | Moore 0.01 vs. 0.005 (converged) | 3–19 |
+  | Moore 0.02 vs. 0.01 (§13's known-bad) | 11–148 |
+  | **von Neumann 0.01 vs. 0.005** | **14–167** |
+  | **von Neumann 0.005 vs. 0.0025** | **5–138** |
+
+  Wet cells at 4.7 d: Moore 409 / 263 / 244 at 0.02 / 0.01 / 0.005, and von Neumann 535 / 430 / 302 at
+  0.01 / 0.005 / 0.0025.
+  - **At `outflow_fraction=0.5`, von Neumann has not converged even at a quarter of Moore's substep
+    bound.** Each halving still removes 100+ cells, mostly the eastern lobe and a speckled channel
+    fringe. So its extra flooding in that regime is partly numerical.
+  - A smaller constant is not a verified fix: 0.0025 is already 4× the substeps and still moving.
+
+  At the live default, to the peak:
+
+  | | Moore | von Neumann |
+  |---|---|---|
+  | 1-ulp noise floor (wet-mask cells) | 3 | 1 |
+  | 0.02 vs. 0.01 (cells) | 54 | 29 |
+  | 0.01 vs. 0.005 (cells) | 106 | 29 |
+  | gap-only CSI at substep 0.02 / 0.01 / 0.005 | 0.892 / 0.899 / 0.869 | 0.752 / 0.749 / 0.754 |
+
+  Here von Neumann is converged at 0.01: 29 cells, CSI within ±0.003. That is tighter than Moore itself.
+- **Decision:**
+  - `_MAX_STABLE_SUBSTEP_FRACTION_VON_NEUMANN = 0.01`, measured rather than assumed. It is the same
+    value as Moore's.
+  - It holds only up to `VON_NEUMANN_MAX_OUTFLOW_FRACTION = 0.085`, the live default. That bound was
+    measured with the time-matched test above. The test takes the mean number of cells that differ
+    between substep 0.01 and 0.005 over 8 matched days (3.0–5.3 d), and compares it with the validated
+    Moore engine's at the same `outflow_fraction`:
+
+    | `outflow_fraction` | von Neumann | Moore | at the peak (vN / Moore) |
+    |---|---|---|---|
+    | **0.085** | **54** | **53** | 29 / 106 |
+    | 0.15 | 71 | 55 | 38 / 42 |
+    | 0.5 | 96 | 9 | — |
+
+    - The bound is the highest measured value at parity with Moore.
+    - 0.15 is only moderately worse (1.3×; worst day 174 against 116), so a looser tolerance would admit
+      it. Nothing is admitted on assumption, though, and 0.25 was not given a Moore reference.
+  - `POST /simulations` rejects von Neumann above it with a 422. The UI clamps the outflow fraction to
+    it when von Neumann is chosen and caps the input there.
+  - Moore is unrestricted, as before.
+  - Tests pin the value and run the flat-water control under von Neumann (0.013, against Moore's 0.015
+    at the same fraction).
+  - The varying-roughness grid's Moore-calibrated 0.05 cutoff did not transfer. Von Neumann sits at
+    ~0.050 at every fraction (0.0503 at 0.005), which is its lattice anisotropy read by an 8-neighbor
+    metric. So that test asserts convergence (halving the fraction changes the metric by < 2%) instead.
+- **Two side findings about the validated Moore engine,** measured here and not changed:
+  - (a) A 1-ulp-perturbed Moore run scores gap-only **CSI 0.8997**, exactly §16.4's documented value. The
+    unperturbed run scores 0.8986. So the 0.8986-vs-0.8997 discrepancy (FP 47 vs. 46) is ulp-level noise,
+    as §18 suspected.
+  - (b) **Moore's validated CSI depends on the substep fraction:** 0.892 / 0.899 / 0.869 at 0.02 / 0.01 /
+    0.005. §16.3 calibrated `outflow_fraction` with the substep bound fixed at 0.01, so the validated
+    result is the configuration "Moore, `outflow_fraction=0.085`, substep 0.01", not a converged-limit
+    claim. The thesis should state it that way.
+
+**Result: same scenario, both neighborhoods.** The real May 2024 event, 90m grid, run to the observed peak at
+the live `outflow_fraction=0.085`:
+
+| | Moore (validated) | von Neumann |
+|---|---|---|
+| macro steps to the peak | 134,639 | 133,245 |
+| flooded cells | 1,955 | 2,583 |
+| naive TP / FP / FN | 789 / 1,166 / 42 | 830 / 1,753 / 1 |
+| naive CSI | 0.395 | 0.321 |
+| gap-only TP / FP / FN | 789 / 47 / 42 | 830 / 277 / 1 |
+| **gap-only CSI** | **0.8986** | **0.7491** |
+| hit rate (gap-only) | 0.949 | 0.999 |
+| water held at the peak (ΣH) | 19,097 | 41,034 (2.15×) |
+| max depth | 28.9 m | 38.3 m |
+| WSE at the gauge cell (observed peak stage 33.66 m) | 36.4 m | 46.8 m |
+| wall-clock to the peak, measured side by side under the same load | 7.41 min | 4.48 min (0.60×) |
+
+Both neighborhoods take almost the same number of macro steps. The substep count is the same, 9, but a von
+Neumann substep visits 4 neighbors instead of 8. At 30m the per-step p50 was 22.7 ms against 37.1 ms
+(0.61×), also measured side by side. For the uncontended Moore figure, see §18: 7.6 min.
+
+- **Where the extents differ:** the von Neumann extent is a strict superset of Moore's (1,955 both, 0
+  Moore-only, 628 von-Neumann-only).
+  - The extra cells form a coherent 1–3 cell rim up the valley sides, everywhere along the reach: median
+    terrain 41 m against 27 m for the shared cells, and a median depth of 5.0 m there. This is a higher
+    water level, not scattered speckle.
+  - 357 of them fall in the unscored Estrela-gap zone.
+  - Of the 271 that are scored, 41 are real hits (FN 42 → 1) and 230 are new false positives (47 → 277).
+- **Likely mechanism** (supported, not proven): the Taquari runs diagonally (NE → SW) across this grid.
+  With only orthogonal moves, water has to staircase along the channel toward the outlet, so the reach
+  conveys less at a given stage. The run holds 2.15× the water, sends less out through the outlet
+  (403,560 against 425,497), and the stage rises until the valley sides flood.
+  - Moore's diagonal moves (weighted by the longer diagonal distance) are what let it follow a channel at
+    any orientation. That matches TCC1's own reason for distinguishing diagonal distances.
+
+**Conclusion.** Von Neumann is available as the setting TCC1 names, but it is **not validated**.
+- On the one event scored, it over-floods relative to Moore: gap-only CSI 0.749 against 0.899.
+- Its `outflow_fraction` was calibrated for Moore (§16.3), and was not re-tuned for 4 neighbors. A von
+  Neumann calibration would need its own sweep and is not claimed here.
+- That sweep is also constrained: above `outflow_fraction=0.085`, von Neumann's result depends more on the
+  substep fraction than Moore's does, so higher values are refused rather than served unconverged.
+- Every validated number in this file (§16.4, §18, §19's agreement counts, §21) is a Moore result. The UI
+  labels a von Neumann run accordingly and never uses it in the replay preset.
 
 ---
 

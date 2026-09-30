@@ -46,6 +46,7 @@ from ingestion.dem import grid_footprint, lonlat_to_cell
 from ingestion.hydrograph import Hydrograph, discharge_to_inflow
 from simulation.engine import (
     DEFAULT_OUTFLOW_FRACTION,
+    VON_NEUMANN_MAX_OUTFLOW_FRACTION,
     compute_stable_dt,
     outflow_fraction_for_dt,
     seed_pool_at,
@@ -68,7 +69,7 @@ MAX_SEED_VOLUME = 10_000.0
 FLOODED_DEPTH_THRESHOLD_M = 0.01
 
 # Parameters that only mean something for a time-stepped run.
-_TEMPORAL_ONLY_FIELDS = ("steps", "frame_interval", "outflow_fraction", "stop_at_peak")
+_TEMPORAL_ONLY_FIELDS = ("steps", "frame_interval", "outflow_fraction", "stop_at_peak", "neighborhood")
 # Parameters that only mean something for a seeded-pool run - the other two
 # modes are driven by the gauge hydrograph, not by an initial pool.
 _SEEDED_POOL_ONLY_FIELDS = ("seed_volume", "seed_location")
@@ -88,6 +89,10 @@ class SimulationParams(BaseModel):
     frame_interval: int | None = Field(default=None, gt=0)
     outflow_fraction: float = Field(default=DEFAULT_OUTFLOW_FRACTION, gt=0, le=1)
     stop_at_peak: bool = False
+    # The temporal engine's neighborhood. Moore is the TCC's model and the only validated one
+    # (docs/tcc-deviations.md sections 16.4 and 22); von Neumann is an unvalidated 4-neighbor option. The
+    # fast engine is Moore-only, so - like the other temporal-only fields - this is rejected for mode "fast".
+    neighborhood: Literal["moore", "von_neumann"] = "moore"
     seed_volume: float = Field(default=DEFAULT_SEED_VOLUME, gt=0, le=MAX_SEED_VOLUME)
     # None: seed at the terrain's lowest point, as before this parameter existed.
     seed_location: SeedLocation | None = None
@@ -107,6 +112,11 @@ class SimulationParams(BaseModel):
             return self
         if self.frame_interval is None:
             raise ValueError(f"frame_interval is required when mode is '{self.mode}'")
+        if self.neighborhood == "von_neumann" and self.outflow_fraction > VON_NEUMANN_MAX_OUTFLOW_FRACTION:
+            raise ValueError(
+                f"outflow_fraction must be <= {VON_NEUMANN_MAX_OUTFLOW_FRACTION} with the von Neumann neighborhood - "
+                "above it its result depends on the substep fraction (docs/tcc-deviations.md section 22)"
+            )
         if self.mode == "seeded_pool" and self.steps is None:
             raise ValueError("steps is required when mode is 'seeded_pool'")
         if self.mode == "seeded_pool" and self.stop_at_peak:
@@ -245,7 +255,7 @@ async def _run_seeded_pool(
 
     for t in range(1, params.steps + 1):
         await _yield_or_stop(client_gone)
-        H = step(Z, H, N, outflow_fraction=params.outflow_fraction)
+        H = step(Z, H, N, outflow_fraction=params.outflow_fraction, neighborhood=params.neighborhood)
         assert H.min() >= -1e-9, f"negative depth at step {t}: {H.min()}"
         # Closed system: the total is the requested seed volume at every step.
         # Relative, like _run_gauge_driven's, since seed_volume now ranges up to
@@ -281,7 +291,7 @@ async def _run_gauge_driven(
         # dt_cfl is the raw CFL bound (courant_number=1.0), kept separate from the
         # capped dt below so outflow_fraction_for_dt can tell how much smaller an
         # application-level cap made this step's dt than physics alone would allow.
-        dt_cfl = compute_stable_dt(Z, H, N, grid.dx)
+        dt_cfl = compute_stable_dt(Z, H, N, grid.dx, neighborhood=params.neighborhood)
         # Cap at the raw ANA feed's own typical sample spacing (~900s). CFL gives
         # an upper bound on dt, not a target, so a smaller dt is always safe - and
         # on a still-dry grid `compute_stable_dt` returns engine.py's
@@ -313,6 +323,7 @@ async def _run_gauge_driven(
             inflow=inflow,
             boundary_elevation=grid.boundary_elevation,
             boundary_roughness=grid.boundary_roughness,
+            neighborhood=params.neighborhood,
         )
         # step()'s return value already reflects whatever left through the
         # outlet boundary - this is the exact bookkeeping invariant documented

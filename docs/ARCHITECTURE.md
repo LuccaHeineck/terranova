@@ -233,7 +233,11 @@ file. No code.
   rather than one single release, which avoids a checkerboard/speckle instability a single large release
   causes (same family of issue as violating a CFL condition) without changing `step`'s external signature
   or how much water moves per call — see `docs/project-plan.md`'s "Engine design notes" for the
-  investigation. Pure NumPy, no side effects.
+  investigation. Pure NumPy, no side effects. `step`/`compute_stable_dt` take `neighborhood="moore"` (default,
+  the TCC's model and the only validated one) or `"von_neumann"` (4 orthogonal neighbors, its own measured
+  substep bound, only converged up to `VON_NEUMANN_MAX_OUTFLOW_FRACTION`, which `api/` enforces); the Moore default is bit-identical to the engine before the option existed, pinned by
+  `tests/test_engine_regression.py` against a frozen copy (`tests/engine_moore_reference.py`) —
+  `docs/tcc-deviations.md` §22. The fast engine stays Moore-only.
 - **`backend/examples/poc_grid.py`** — builds a synthetic bowl-plus-hill terrain, seeds a pool of water,
   runs `simulation.engine.step` in a loop for a fixed number of iterations, asserting mass conservation
   and non-negative depth after every step, then plots terrain vs. depth at several snapshots in time

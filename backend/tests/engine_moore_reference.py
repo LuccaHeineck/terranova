@@ -1,11 +1,16 @@
+# FROZEN REFERENCE - do not edit. A verbatim copy of simulation/engine.py at commit 309e60b,
+# taken before the neighborhood option was added (docs/tcc-deviations.md section 22).
+# tests/test_engine_regression.py runs the live engine's default (Moore) path against
+# this copy and requires bit-identical H and dt at every step. Everything below this
+# header is byte-for-byte `git show 309e60b:backend/simulation/engine.py`.
+
 """Macroscopic cellular automaton engine for flood propagation.
 
 Each cell holds a static terrain elevation (Z), a dynamic water depth (H),
 and a static Manning roughness coefficient (N). `step` advances H by one
-discrete iteration: water moves from each cell to its 8 Moore neighbors
-(the default, and the TCC's documented model) or, optionally, its 4 von
-Neumann neighbors, weighted by slope and by the roughness of the neighbor
-being flowed into, never uphill. The grid is closed and walled on all sides by default (nothing
+discrete iteration: water moves from each cell to its 8 Moore neighbors,
+weighted by slope and by the roughness of the neighbor being flowed into,
+never uphill. The grid is closed and walled on all sides by default (nothing
 enters or leaves, mass conserved exactly) but can be made an open system via
 `step`'s optional `inflow` source term (e.g. boundary inflow standing in for
 upstream river discharge, in which case volume grows by exactly the injected
@@ -38,21 +43,6 @@ MOORE_OFFSETS = [
     (0, -1), (0, 1),
     (1, -1), (1, 0), (1, 1),
 ]
-
-# The 4 orthogonal neighbors - an optional alternative to the TCC's Moore
-# neighborhood (docs/tcc-deviations.md section 22), which stays the default and
-# the only validated one. Moore's default path is bit-identical to the engine
-# before this option existed: same offsets list, same iteration order, so the
-# same floating-point operations in the same order (pinned by
-# tests/test_engine_regression.py against a frozen copy of that engine).
-VON_NEUMANN_OFFSETS = [
-    (-1, 0),
-    (0, -1), (0, 1),
-    (1, 0),
-]
-
-NEIGHBORHOODS = ("moore", "von_neumann")
-_NEIGHBORHOOD_OFFSETS = {"moore": MOORE_OFFSETS, "von_neumann": VON_NEUMANN_OFFSETS}
 
 # All cells release their capped outflow simultaneously (a synchronous/Jacobi
 # update, required for CA parallelism). If a single release moves too large a
@@ -87,35 +77,6 @@ _NEIGHBORHOOD_OFFSETS = {"moore": MOORE_OFFSETS, "von_neumann": VON_NEUMANN_OFFS
 # this investigation as a negative result, not abandoned work.
 _MAX_STABLE_SUBSTEP_FRACTION = 0.01
 
-# The von Neumann neighborhood's own substep bound, measured on real terrain rather
-# than assumed equal to Moore's (docs/tcc-deviations.md section 22). The same value
-# as Moore's, but it only holds up to VON_NEUMANN_MAX_OUTFLOW_FRACTION below.
-_MAX_STABLE_SUBSTEP_FRACTION_VON_NEUMANN = 0.01
-
-# The largest outflow_fraction at which von Neumann's result was measured to be no
-# more sensitive to the substep fraction than the validated Moore engine's, on real
-# terrain at matched simulated times (docs/tcc-deviations.md section 22: 54 vs. 53
-# differing cells here, 71 vs. 55 at 0.15, 96 vs. 9 at 0.5). Above it the result keeps
-# changing as the substep fraction shrinks - at 0.5 it had not settled even at a
-# quarter of the substep bound (0.0025), while Moore had by 0.01 - so a smaller
-# constant is not a fix. Not enforced here (exploratory scripts probe
-# past it on purpose); api/ rejects von Neumann above it, and the UI caps it.
-VON_NEUMANN_MAX_OUTFLOW_FRACTION = 0.085
-
-
-def _neighborhood_offsets(neighborhood: str) -> list[tuple[int, int]]:
-    try:
-        return _NEIGHBORHOOD_OFFSETS[neighborhood]
-    except KeyError:
-        raise ValueError(f"neighborhood must be one of {NEIGHBORHOODS}, got {neighborhood!r}") from None
-
-
-def _max_stable_substep_fraction(neighborhood: str) -> float:
-    # Looked up at call time (not bound at import) so tests can patch either constant.
-    if neighborhood == "von_neumann":
-        return _MAX_STABLE_SUBSTEP_FRACTION_VON_NEUMANN
-    return _MAX_STABLE_SUBSTEP_FRACTION
-
 
 def _array_module(a):
     """NumPy for NumPy arrays, CuPy for CuPy arrays - so every function below can
@@ -128,14 +89,8 @@ def _array_module(a):
     return np
 
 
-def _single_update(
-    Zp: np.ndarray,
-    Np: np.ndarray,
-    H: np.ndarray,
-    outflow_fraction: float,
-    offsets: list[tuple[int, int]] = MOORE_OFFSETS,
-) -> np.ndarray:
-    """One synchronous redistribution pass over `offsets` (Moore by default)."""
+def _single_update(Zp: np.ndarray, Np: np.ndarray, H: np.ndarray, outflow_fraction: float) -> np.ndarray:
+    """One synchronous Moore-neighborhood redistribution pass."""
     xp = _array_module(H)
     rows, cols = H.shape
     Hp = xp.pad(H, 1, mode="constant", constant_values=0.0)
@@ -144,14 +99,14 @@ def _single_update(
 
     weights = []
     total_weight = xp.zeros((rows, cols))
-    for dr, dc in offsets:
+    for dr, dc in MOORE_OFFSETS:
         neighbor = wse[1 + dr: 1 + dr + rows, 1 + dc: 1 + dc + cols]
         neighbor_n = Np[1 + dr: 1 + dr + rows, 1 + dc: 1 + dc + cols]
         distance = math.hypot(dr, dc)
         drop = xp.maximum(center - neighbor, 0.0)
         slope = drop / distance
         # Manning's Q_i = (1/n_i) * h_i^(5/3) * sqrt(S_i). h_i (the source
-        # cell's own depth) is the same in every direction, so it's a
+        # cell's own depth) is the same in all 8 directions, so it's a
         # constant factor that cancels out once weights are normalized below
         # - it's intentionally omitted here rather than computed and thrown
         # away. n_i is the destination neighbor's roughness (the surface the
@@ -167,7 +122,7 @@ def _single_update(
     total_outflow = xp.where(has_outflow, outflow_fraction * H, 0.0)
 
     inflow = xp.zeros((rows + 2, cols + 2))
-    for (dr, dc), weight in zip(offsets, weights):
+    for (dr, dc), weight in zip(MOORE_OFFSETS, weights):
         outflow = total_outflow * (weight / safe_total_weight)
         inflow[1 + dr: 1 + dr + rows, 1 + dc: 1 + dc + cols] += outflow
 
@@ -182,14 +137,12 @@ def step(
     inflow: np.ndarray | None = None,
     boundary_elevation: np.ndarray | None = None,
     boundary_roughness: np.ndarray | None = None,
-    neighborhood: str = "moore",
 ) -> np.ndarray:
     """Advance the water depth grid H by one discrete time step.
 
     For each cell, water surface elevation is `Z + H`. Over the step, the
     cell releases at most `outflow_fraction` of its current depth in total,
-    split among its downhill neighbors - the 8 Moore neighbors by default, or
-    the 4 orthogonal ones with `neighborhood="von_neumann"` - weighted by `sqrt(slope) / n`
+    split among its downhill Moore neighbors weighted by `sqrt(slope) / n`
     (slope = elevation drop divided by distance, with diagonal neighbors
     farther than orthogonal ones; `n` = the receiving neighbor's Manning
     roughness coefficient from `N`, so smoother neighbors draw proportionally
@@ -237,7 +190,6 @@ def step(
     override arrays are actually constructed from the DEM.
     """
     xp = _array_module(H)
-    offsets = _neighborhood_offsets(neighborhood)
     if not (0 < outflow_fraction <= 1):
         raise ValueError("outflow_fraction must be in (0, 1]")
     if xp.any(N <= 0):
@@ -256,7 +208,7 @@ def step(
         if xp.any(boundary_roughness <= 0):
             raise ValueError("boundary_roughness must be strictly positive everywhere")
 
-    n_substeps = math.ceil(outflow_fraction / _max_stable_substep_fraction(neighborhood))
+    n_substeps = math.ceil(outflow_fraction / _MAX_STABLE_SUBSTEP_FRACTION)
     # Per-substep fraction chosen so that n_substeps of sequential depletion
     # at this rate remove the same total fraction as one release of
     # outflow_fraction would (1 - (1 - f) = compounding decay identity).
@@ -275,7 +227,7 @@ def step(
         # corrupting the array.
         Np = xp.pad(N, 1, mode="constant", constant_values=1.0)
     for _ in range(n_substeps):
-        H = _single_update(Zp, Np, H, substep_fraction, offsets)
+        H = _single_update(Zp, Np, H, substep_fraction)
     if inflow is not None:
         H = H + inflow
     return H
@@ -294,7 +246,6 @@ def compute_stable_dt(
     N: np.ndarray,
     dx: float,
     courant_number: float = 1.0,
-    neighborhood: str = "moore",
 ) -> float:
     """Derive the real elapsed time (in seconds) that one `step()` call should be
     considered to represent, from the current water depth `H`, under a CFL-style
@@ -310,9 +261,7 @@ def compute_stable_dt(
     simplification (hydraulic radius R ~= depth h), using the SI form of Manning's
     equation (coefficient 1, not the US customary 1.49, since everything here is
     metric): `v = (1/n) * h^(2/3) * sqrt(S)`, where `S` is the cell's steepest real
-    downhill slope (`drop / (distance_cells * dx)`, over the same neighbors `step()`
-    uses for `neighborhood` - 8 Moore by default, 4 von Neumann otherwise - so the
-    CFL bound only sees slopes water can actually flow down).
+    downhill slope (`drop / (distance_cells * dx)`, over the 8 Moore neighbors).
     `drop` is a water-surface-elevation (`WSE = Z + H`) difference, matching
     `_single_update`'s own head-driven convention, not bare terrain elevation - a
     cell already carrying deep water has a shallower effective WSE drop to a dry
@@ -339,7 +288,6 @@ def compute_stable_dt(
     leaves for later steps to reconcile.
     """
     xp = _array_module(H)
-    offsets = _neighborhood_offsets(neighborhood)
     if dx <= 0:
         raise ValueError("dx must be positive")
     if not (0 < courant_number <= 1):
@@ -354,7 +302,7 @@ def compute_stable_dt(
     center = wse[1:-1, 1:-1]
 
     max_slope = xp.zeros((rows, cols))
-    for dr, dc in offsets:
+    for dr, dc in MOORE_OFFSETS:
         neighbor = wse[1 + dr: 1 + dr + rows, 1 + dc: 1 + dc + cols]
         distance = math.hypot(dr, dc)
         drop = xp.maximum(center - neighbor, 0.0)
@@ -425,19 +373,4 @@ def seed_pool_at_lowest_point(Z: np.ndarray, H: np.ndarray, volume: float) -> No
     ry = int(np.clip(ry, 2, Z.shape[0] - 3))
     rx = int(np.clip(rx, 2, Z.shape[1] - 3))
     patch = H[ry - 2: ry + 3, rx - 2: rx + 3]
-    patch[:] = volume / patch.size
-
-
-def seed_pool_at(H: np.ndarray, volume: float, row: int, col: int) -> None:
-    """Seed the same 5x5 pool as `seed_pool_at_lowest_point`, centered on a
-    caller-chosen cell (e.g. a location clicked on the map), in place on `H`.
-
-    Near an edge the patch is clipped to the grid rather than moved inward, so
-    the pool stays centered on the chosen cell; `volume` is spread over however
-    many cells the clipped patch covers, so the total is `volume` either way.
-    """
-    rows, cols = H.shape
-    if not (0 <= row < rows and 0 <= col < cols):
-        raise ValueError(f"seed cell ({row}, {col}) is outside the {rows}x{cols} grid")
-    patch = H[max(row - 2, 0): min(row + 3, rows), max(col - 2, 0): min(col + 3, cols)]
     patch[:] = volume / patch.size

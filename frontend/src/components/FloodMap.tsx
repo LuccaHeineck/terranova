@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import L from 'leaflet'
-import type { Bounds, LatLon } from '../types/simulation'
+import { NEIGHBORHOOD_LABEL } from '../types/simulation'
+import type { Bounds, LatLon, Neighborhood } from '../types/simulation'
 import type { CompactFrame, DepthGrid } from '../rendering/depthGrid'
 import type { Engine, ResultLayers } from '../hooks/useSimulationRun'
 import type { Timeline as TimelineState } from '../hooks/useTimeline'
@@ -55,11 +56,16 @@ function resolveView(view: MapView, available: Record<MapView, boolean>): MapVie
   return available[other] ? other : null
 }
 
-function paneLabel(engine: Engine, frame: CompactFrame | null): string {
-  if (!frame) return engine === 'fast' ? 'Fast: computing…' : 'Temporal CA: starting…'
+/** "Temporal CA", naming the neighborhood when it isn't the validated Moore one. */
+function temporalName(neighborhood: Neighborhood | undefined): string {
+  return !neighborhood || neighborhood === 'moore' ? 'Temporal CA' : `Temporal CA (${NEIGHBORHOOD_LABEL[neighborhood]})`
+}
+
+function paneLabel(engine: Engine, frame: CompactFrame | null, neighborhood?: Neighborhood): string {
+  if (!frame) return engine === 'fast' ? 'Fast: computing…' : `${temporalName(neighborhood)}: starting…`
   if (engine === 'fast') return 'Fast: steady peak extent'
   const hours = (frame.elapsed_time ?? 0) / 3600
-  return `Temporal CA: t = ${hours.toFixed(1)} h`
+  return `${temporalName(neighborhood)}: t = ${hours.toFixed(1)} h`
 }
 
 // The temporal overlay is shaded by depth; the fast one shows extent only, since its depths are not calibrated.
@@ -167,7 +173,7 @@ export function FloodMap({
         <MapPane
           bounds={bounds}
           imageUrl={primary === 'fast' ? fastUrl : temporalUrl}
-          label={compare ? paneLabel('temporal', timeline.frame) : undefined}
+          label={compare ? paneLabel('temporal', timeline.frame, layers.temporal?.neighborhood) : undefined}
           legend={shown ? LEGEND[primary] : undefined}
           onMapReady={onPrimaryReady}
           {...seedProps}
@@ -225,7 +231,13 @@ export function FloodMap({
             ))}
           </div>
           {shown && !compare && (
-            <div className="text-gray-700">{shown === 'fast' ? 'Fast mode: steady peak extent' : 'Temporal CA depth'}</div>
+            <div className="text-gray-700">
+              {shown === 'fast'
+                ? 'Fast mode: steady peak extent'
+                : layers.temporal?.neighborhood === 'von_neumann'
+                  ? 'Temporal CA depth, von Neumann (not validated)'
+                  : 'Temporal CA depth'}
+            </div>
           )}
           {compare && <div className="text-gray-700">Pan or zoom either map; both follow.</div>}
         </div>

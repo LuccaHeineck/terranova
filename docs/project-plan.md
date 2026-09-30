@@ -1110,6 +1110,125 @@ Gauge-driven and fast mode are unchanged, and the transition rule is untouched.
   cell. Fixing it means drawing the overlay in the grid's own projection (reprojected image or a rotated
   overlay).
 
+**Von Neumann (4-neighbor) option for the temporal engine.** The "Moderate" backlog item below, and the
+"neighborhood type" setting TCC1 names. Moore stays the default and the only validated neighborhood. The full
+write-up is in `docs/tcc-deviations.md` §22. The work was regression-first: the reference was frozen and the
+offline baseline recorded before `engine.py` was touched.
+- **Engine:**
+  - `step(..., neighborhood="moore" | "von_neumann")` and `compute_stable_dt(..., neighborhood=...)`. The CFL
+    search walks the same neighbors as the redistribution.
+  - `_MAX_STABLE_SUBSTEP_FRACTION_VON_NEUMANN` is its own constant, set from the real-terrain measurement
+    below.
+  - It is still dependency-free and NumPy/CuPy-agnostic. `NEIGHBORHOODS` lists the valid values, and an
+    unknown one raises `ValueError`.
+- **Moore is bit-identical to the old engine, proved rather than argued:**
+  - `tests/test_engine_regression.py` compares against `tests/engine_moore_reference.py`, a verbatim frozen
+    copy verified with `diff`. It requires exact `H` and `dt` equality every step, over 500 synthetic
+    gauge-style steps and 1,000 real May 2024 steps on the 90m grid, with the argument omitted and with
+    `"moore"`.
+  - A mutation check (only reordering the Moore offsets) is caught at step 2 by a 1.1e-16 difference.
+  - The **offline May 2024 run to the peak, before vs. after, matched exactly**: 134,639 steps, naive
+    789 / 1,166 / 42 (CSI 0.3951), gap-only 789 / 47 / 42 (**CSI 0.8986**), and identical final `H` and masks.
+  - §16.4's 0.8997 is the older one-cell variant §18 already recorded (FP 1,167 → 46). The engine produced
+    0.8986 before this change as well.
+- **Isotropy:**
+  - The stencil's own support is exact: a square (L∞) under Moore and a diamond (L1) under von Neumann.
+  - At the spreading front, Moore's contour is octagon-like (fill 0.87, diagonal/axial 0.75) and von
+    Neumann's diamond-like (0.65 / 0.64).
+  - The developed bulk is near-round under both (fill 0.77–0.80). The many substeps diffuse the stencil's
+    anisotropy out of the core, so only a von Neumann flood's fringe is diamond-shaped. The test asserts
+    exactly that.
+- **Real-terrain stability (§13's rule): the answer depends on `outflow_fraction`, and the method had to
+  improve.**
+  - At the live default, von Neumann at 0.01 looks clean (90m to the peak, a 30m segment, cell-level
+    zooms), and the scalar metrics agree.
+  - But the positive control, Moore at 0.02 (§13's known-bad), also scores and looks clean there. So
+    those checks alone prove nothing.
+  - In §13's own regime (`outflow_fraction=0.5`), step-matched snapshots turned out to compare different
+    simulated times. The benchmark gained `--snapshot-days`/`--stop-days` and a `--perturb-ulp`
+    noise-floor control.
+  - The working test is convergence in the substep fraction at matched times, over the 1-ulp floor (0–3
+    cells):
+    - at 0.5, Moore is converged at 0.01 (3–19 cells from 0.005);
+    - **von Neumann is not, even at 0.0025** (0.005 vs. 0.0025 still 5–138 cells, the extent still
+      shrinking 535 → 430 → 302);
+    - at the live default, von Neumann is converged (29 cells, CSI ±0.003), more tightly than Moore (106).
+  - So the substep bound is kept at 0.01, measured and not assumed, but von Neumann is **restricted to
+    `outflow_fraction ≤ VON_NEUMANN_MAX_OUTFLOW_FRACTION`**. That limit comes from the same test, and is **0.085**, the live default. It is the highest outflow
+    fraction at which von Neumann's time-matched substep sensitivity matches Moore's: mean 54 vs. 53
+    differing cells. At 0.15 it is 71 vs. 55, and at 0.5 it is 96 vs. 9.
+  - The API returns a 422 above it, and the UI clamps and caps the input.
+  - Side findings about the validated Moore engine, left unchanged:
+    - a 1-ulp-perturbed Moore run scores gap-only CSI **0.8997**, §16.4's exact number, so 0.8986 vs.
+      0.8997 is ulp noise;
+    - Moore's CSI depends on the substep fraction (0.892 / 0.899 / 0.869 at 0.02 / 0.01 / 0.005), so the
+      validated result is the configuration with substep 0.01.
+- **API:** `neighborhood` on `POST /simulations` for the temporal modes. It is a 422 with `mode: "fast"`
+  (a temporal-only field, like `steps`), and the fast engine stays Moore-only.
+- **Frontend:**
+  - A Neighborhood toggle ("Moore (8 neighbors), validated" / "von Neumann (4 neighbors), not validated") with
+    the note "The validated May 2024 results (CSI 0.90, the fast-mode agreement) apply to the Moore
+    neighborhood only."
+  - The replay preset sends `neighborhood: "moore"` explicitly and resets the form to it.
+  - `ResultLayer.neighborhood` carries the value. `isComparable` is unchanged, so the §21 clearing rules
+    are too.
+  - A von Neumann run is named on the temporal pane ("Temporal CA (von Neumann): t = …"), in the
+    single-view caption and in the log.
+  - Compare against a fast result adds a "Different neighborhoods" warning.
+- **Same scenario, both neighborhoods** (May 2024, 90m, to the peak, `outflow_fraction=0.085`):
+
+  | | Moore | von Neumann |
+  |---|---|---|
+  | flooded cells | 1,955 | 2,583 |
+  | gap-only TP / FP / FN | 789 / 47 / 42 | 830 / 277 / 1 |
+  | gap-only CSI | 0.899 | 0.749 |
+  | water held at the peak | 19,097 | 41,034 |
+  | WSE at the gauge (observed 33.66 m) | 36.4 m | 46.8 m |
+
+  - The von Neumann extent is a strict superset of Moore's (1,955 both, 0 Moore-only, 628 von-Neumann-only).
+  - The extra cells are a coherent 1–3 cell rim up the valley sides: a higher water level, not speckle.
+  - The likely cause is orthogonal-only routing along a channel that runs diagonally across the grid, which
+    slows its conveyance to the outlet.
+  - The von Neumann result is not calibrated: `outflow_fraction` was tuned for Moore.
+  - Runtime: about the same step count, with 0.60× the wall-clock at 90m and 0.61× per step at 30m
+    (4 neighbors per substep instead of 8), measured side by side.
+- **Tests:**
+  - `test_engine_regression.py` (4);
+  - `test_engine.py` (+10): conservation, exact inflow/outlet bookkeeping, the stencil's support, spread
+    shapes, `compute_stable_dt`'s neighbors, rejecting unknown values, the von Neumann substep pin with the
+    flat-water control, and convergence on the varying-roughness grid;
+  - `test_api.py` (+7): explicit Moore equals the default, von Neumann conserves in seeded-pool and
+    gauge-driven runs, `neighborhood` is rejected for fast, an unknown value is rejected, and the
+    outflow-fraction cap is enforced.
+  - Suite: **158/158**.
+- **Verified in a real browser** (Playwright + Chromium against real `uvicorn` + `npm run dev`), all 24
+  checks passed:
+  - The toggle shows only for the temporal engine. Seeded-pool and gauge-driven POSTs carry
+    `neighborhood`, and fast POSTs never do.
+  - Choosing von Neumann clamps an outflow fraction of 0.5 down to 0.085 and caps the input there, with a
+    hint. A value of 0.3 fails the form's constraint, so Start is blocked. Moore lifts the cap, and the API
+    independently returns 422 for von Neumann at 0.3.
+  - A von Neumann seeded pool conserves 400 and differs from Moore's. At step 1 there are 55 wet cells and
+    a support of 136, against Moore's 61 / 213.
+  - The caption and log name von Neumann.
+  - A von Neumann gauge-driven run @ 90m (stopped), then fast → Compare shows the "Different
+    neighborhoods" warning, with the pane labelled "Temporal CA (von Neumann)".
+  - A Moore run plus fast shows no warning.
+  - The replay preset clicked with the form on von Neumann sent fast, then the temporal run with
+    `neighborhood: "moore"`. The form flipped to Moore and no warning showed.
+  - §21: a (von Neumann) seeded-pool run cleared the fast layer, and a grid change cleared the temporal
+    layer.
+- **Bugs:** none in the app, from the browser or from `tsc`/lint (clean at every step).
+  - The one browser failure was the driver's own. Its frame counter wasn't reset between runs, so it
+    clicked Stop before the gauge-driven run's first frame. The app then correctly dropped the frame-less
+    layer, and Compare stayed disabled.
+  - The real findings were in the numerics, not the code:
+    - the Moore-calibrated synthetic checkerboard cutoff does not transfer to von Neumann;
+    - scalar mottling metrics missed §13's known artifact;
+    - step-matched snapshots compare different simulated times.
+
+  All three are recorded in §22.
+
 To run the CA-engine PoC directly (bare-metal, unrelated to Docker): `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 
 To run the real end-to-end CSI validation against the May 2024 event (bare-metal, expect ~30 minutes):
@@ -1142,7 +1261,7 @@ backend/
   requirements.txt   # numpy, matplotlib, fastapi, uvicorn, pytest, httpx2, rasterio, requests, python-dotenv
   simulation/
     __init__.py
-    engine.py         # core CA step, compute_stable_dt, seed_pool_at_lowest_point / seed_pool_at — pure NumPy, no I/O
+    engine.py         # core CA step (Moore default / von Neumann option), compute_stable_dt, seed_pool_at_lowest_point / seed_pool_at — pure NumPy, no I/O
     fast_engine.py     # Torres-inspired non-temporal fast mode: classify_steady_flood (hybrid architecture, §19)
   examples/
     __init__.py
@@ -1179,6 +1298,8 @@ backend/
   tests/
     __init__.py
     test_engine.py
+    test_engine_regression.py  # Moore path bit-identical to engine_moore_reference.py (frozen pre-neighborhood engine)
+    engine_moore_reference.py
     test_ingestion.py
     test_landcover.py
     test_hydrograph.py
@@ -1281,8 +1402,9 @@ they'd cost and whether they touch the TCC's documented model:
   see "Timeline scrubber" in Current status)*.
 
 **Moderate — small engine option, no change to the documented base model:**
-- Neighborhood-type toggle (Moore vs. von Neumann) in the config panel — the engine is Moore-only
-  today; von Neumann would be a genuinely new, smaller-neighborhood code path, not just a flag.
+- ~~Neighborhood-type toggle (Moore vs. von Neumann) in the config panel~~ *(done for the temporal engine,
+  unvalidated, Moore stays the default — see "Von Neumann (4-neighbor) option" in Current status and
+  `docs/tcc-deviations.md` §22)*.
 
 **Bigger — real modeling changes, a deliberate scope decision for the thesis, not just engineering:**
 - **Rain input** (rate/duration exposed in the UI): needs a source term that injects volume into

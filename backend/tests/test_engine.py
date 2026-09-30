@@ -603,3 +603,186 @@ def test_seed_pool_at_clips_the_patch_at_an_edge_instead_of_moving_it():
 def test_seed_pool_at_rejects_a_cell_outside_the_grid():
     with pytest.raises(ValueError):
         seed_pool_at(np.zeros((10, 10)), volume=50.0, row=10, col=0)
+
+
+# --- neighborhood option (docs/tcc-deviations.md section 22) -----------------------------------------------
+
+NEIGHBORHOODS = ["moore", "von_neumann"]
+
+
+@pytest.mark.parametrize("neighborhood", NEIGHBORHOODS)
+def test_closed_system_conserves_mass_and_depth_stays_nonnegative(neighborhood):
+    rows, cols = 20, 20
+    y, x = np.mgrid[0:rows, 0:cols].astype(float)
+    Z = ((x - cols / 2) ** 2 + (y - rows / 2) ** 2) / (rows * cols)
+    N = 0.03 + 0.04 * (x > cols / 2)
+    H = np.zeros((rows, cols))
+    H[8:12, 3:7] = 5.0
+    initial_volume = H.sum()
+
+    for t in range(80):
+        H = step(Z, H, N, neighborhood=neighborhood)
+        assert H.min() >= -1e-9, f"negative depth at step {t}: {H.min()}"
+        assert abs(H.sum() - initial_volume) <= 1e-12 * initial_volume, f"volume drifted at step {t}"
+
+
+@pytest.mark.parametrize("neighborhood", NEIGHBORHOODS)
+def test_inflow_and_outlet_bookkeeping_is_exact(neighborhood):
+    """Open system: final volume == inflow - outflow, with outflow booked from H before/after each step."""
+    rows, cols = 12, 12
+    Z = np.add.outer(np.linspace(6.0, 0.0, rows), np.zeros(cols))
+    N = np.full((rows, cols), 0.05)
+    H = np.zeros((rows, cols))
+    inflow = np.zeros((rows, cols))
+    inflow[0, 5:7] = 0.5
+    boundary_elevation = np.pad(Z, 1, mode="constant", constant_values=np.inf)
+    boundary_elevation[-1, 6] = -5.0
+    boundary_roughness = np.pad(N, 1, mode="constant", constant_values=1.0)
+    boundary_roughness[-1, 6] = 0.04
+
+    cumulative_inflow = cumulative_outflow = 0.0
+    for t in range(200):
+        before = H.sum()
+        H = step(Z, H, N, inflow=inflow, boundary_elevation=boundary_elevation,
+                 boundary_roughness=boundary_roughness, neighborhood=neighborhood)
+        cumulative_inflow += inflow.sum()
+        cumulative_outflow += before + inflow.sum() - H.sum()
+        assert H.min() >= -1e-9, f"negative depth at step {t}: {H.min()}"
+    assert cumulative_outflow > 0, "the outlet should have drained something"
+    assert H.sum() == pytest.approx(cumulative_inflow - cumulative_outflow, rel=1e-12)
+
+
+def _point_source(neighborhood, steps, outflow_fraction=engine.DEFAULT_OUTFLOW_FRACTION, n=81):
+    Z = np.zeros((n, n))
+    N = np.full((n, n), 0.05)
+    H = np.zeros((n, n))
+    H[n // 2, n // 2] = 100.0
+    for _ in range(steps):
+        H = step(Z, H, N, outflow_fraction=outflow_fraction, neighborhood=neighborhood)
+    return H
+
+
+def _reach_and_fill(wet):
+    """Axial reach `a`, diagonal reach `d` (in cells, from the center) and the fraction of the enclosing
+    (2a+1)^2 square the wet set fills: 1 for a square, ~0.83 for a regular octagon, 0.785 for a disc and
+    ~0.5 for a diamond."""
+    c = wet.shape[0] // 2
+    a = max(k for k in range(c + 1) if wet[c, c + k])
+    d = max(k for k in range(c + 1) if wet[c + k, c + k])
+    return a, d, wet.sum() / (2 * a + 1) ** 2
+
+
+def test_single_substep_support_is_the_neighborhood_geometry():
+    """The stencil itself: with one substep per step, water reaches exactly the L-infinity ball (a square)
+    under Moore and exactly the L1 ball (a diamond) under von Neumann after k steps."""
+    k = 6
+    rr, cc = np.mgrid[0:81, 0:81] - 40
+    moore = _point_source("moore", k, outflow_fraction=0.01) > 0
+    von_neumann = _point_source("von_neumann", k, outflow_fraction=0.01) > 0
+
+    assert np.array_equal(moore, np.maximum(abs(rr), abs(cc)) <= k)
+    assert np.array_equal(von_neumann, abs(rr) + abs(cc) <= k)
+
+
+def test_spread_shape_is_octagon_like_under_moore_and_diamond_like_under_von_neumann():
+    """Isotropy on a flat grid with a point source, at the default outflow fraction (9 substeps/step).
+
+    The lattice shape shows in the spreading front - the low-depth tail, here 1e-9 of the peak depth:
+    Moore's contour fills ~0.87 of its square with diagonal reach ~0.75 of axial (octagon-like), von
+    Neumann's ~0.65 with ~0.6 (leaning to a diamond). The bulk of the pool (1% of the peak) is near-round
+    under both after enough steps - the many substeps diffuse the stencil's anisotropy out of the core -
+    so a 4-neighbor run's flood *bulk* is not a diamond; only its fringe is. Thresholds measured once
+    (docs/tcc-deviations.md section 22) with margin.
+    """
+    moore = _point_source("moore", 20)
+    von_neumann = _point_source("von_neumann", 20)
+
+    a_m, d_m, fill_m = _reach_and_fill(moore > 1e-9 * moore.max())
+    a_v, d_v, fill_v = _reach_and_fill(von_neumann > 1e-9 * von_neumann.max())
+    assert fill_m > 0.8 and d_m / a_m > 0.7, (a_m, d_m, fill_m)
+    assert fill_v < 0.72 and d_v / a_v < 0.68, (a_v, d_v, fill_v)
+    assert a_v <= a_m  # 4 neighbors: fewer ways out, so the front advances no farther
+
+    # The developed bulk is round under both (a disc fills 0.785).
+    for neighborhood in NEIGHBORHOODS:
+        H = _point_source(neighborhood, 80)
+        _, _, fill = _reach_and_fill(H > 0.01 * H.max())
+        assert 0.7 < fill < 0.85, (neighborhood, fill)
+
+
+def test_compute_stable_dt_uses_the_same_neighbors_as_step():
+    """A pit whose only lower neighbor is diagonal: Moore's step() drains it there and its CFL search sees
+    that slope (finite dt); under von Neumann step() can't move the water at all, and the CFL search mustn't
+    count the diagonal slope either (no-flow fallback)."""
+    Z = np.array([[9.0, 9.0, 9.0], [9.0, 5.0, 9.0], [9.0, 9.0, 0.0]])
+    H = np.zeros((3, 3))
+    H[1, 1] = 1.0
+    N = np.full((3, 3), 0.05)
+
+    assert compute_stable_dt(Z, H, N, dx=30.0) < engine._NO_FLOW_FALLBACK_DT_SECONDS
+    assert step(Z, H, N)[2, 2] > 0
+    assert compute_stable_dt(Z, H, N, dx=30.0, neighborhood="von_neumann") == engine._NO_FLOW_FALLBACK_DT_SECONDS
+    assert np.array_equal(step(Z, H, N, neighborhood="von_neumann"), H)
+
+
+def test_neighborhood_rejects_unknown_values():
+    Z = np.zeros((3, 3))
+    H = np.zeros((3, 3))
+    N = np.full((3, 3), 0.05)
+    with pytest.raises(ValueError):
+        step(Z, H, N, neighborhood="hexagonal")
+    with pytest.raises(ValueError):
+        compute_stable_dt(Z, H, N, dx=30.0, neighborhood="hexagonal")
+
+
+def _moore8_roughness(H):
+    """test_no_checkerboard_artifact_with_varying_roughness's metric: mean |H - mean(8 neighbors)| over wet cells."""
+    rows, cols = H.shape
+    padded = np.pad(H, 1, mode="edge")
+    neighbor_mean = sum(
+        padded[1 + dr: 1 + dr + rows, 1 + dc: 1 + dc + cols]
+        for dr in (-1, 0, 1) for dc in (-1, 0, 1) if not (dr == 0 and dc == 0)
+    ) / 8.0
+    flooded = H > 1e-6
+    return np.abs(H[flooded] - neighbor_mean[flooded]).mean()
+
+
+def test_von_neumann_substep_fraction_stays_at_the_real_data_validated_value():
+    """Pins _MAX_STABLE_SUBSTEP_FRACTION_VON_NEUMANN at the value measured on real terrain (docs/tcc-deviations.md
+    section 22) - not assumed from Moore's. Like the Moore pin above, passing the synthetic control below is
+    necessary but not sufficient: changing this constant needs the real-terrain check re-run."""
+    assert engine._MAX_STABLE_SUBSTEP_FRACTION_VON_NEUMANN == pytest.approx(0.01)
+
+    # The flat-water control, under von Neumann (0.013 measured; Moore's is 0.015 at the same fraction).
+    Z = np.zeros((20, 20))
+    N = np.full((20, 20), 0.05)
+    H = np.full((20, 20), 2.0)
+    H[10, 10] += 0.5
+    for _ in range(30):
+        H = step(Z, H, N, neighborhood="von_neumann")
+    roughness = _moore8_roughness(H)
+    assert roughness < 0.05, f"flat-water control regression (von Neumann): roughness={roughness:.5f}"
+
+
+def test_von_neumann_varying_roughness_grid_is_converged_in_the_substep_fraction():
+    """The varying-roughness checkerboard grid under von Neumann. Its Moore-8 roughness sits at ~0.050 whatever
+    the substep fraction (0.0503 at 0.005, 0.0505 at 0.01): that level is the 4-neighbor lattice's own
+    anisotropy as read by an 8-neighbor metric, not an instability, so the Moore-calibrated 0.05 cutoff doesn't
+    transfer. What an instability would show is dependence on the fraction - so assert that halving it
+    changes nothing material."""
+    rows, cols = 40, 40
+    y, x = np.mgrid[0:rows, 0:cols].astype(float)
+    Z = ((x - cols / 2) ** 2 + (y - rows / 2) ** 2) / (rows * cols) * 3.0
+    diagonal = (x - y) / max(rows, cols)
+    N = 0.09 - 0.07 * np.exp(-(diagonal ** 2) / (2 * 0.15 ** 2))
+
+    def roughness_at(fraction):
+        H = np.zeros((rows, cols))
+        H[rows // 2 - 2: rows // 2 + 3, cols // 2 - 2: cols // 2 + 3] = 400.0 / 25
+        with mock.patch.object(engine, "_MAX_STABLE_SUBSTEP_FRACTION_VON_NEUMANN", fraction):
+            for _ in range(60):
+                H = step(Z, H, N, neighborhood="von_neumann")
+        return _moore8_roughness(H)
+
+    chosen = engine._MAX_STABLE_SUBSTEP_FRACTION_VON_NEUMANN
+    assert roughness_at(chosen) <= 1.02 * roughness_at(chosen / 2)
