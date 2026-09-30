@@ -33,11 +33,16 @@ def _load_grid(dem_path: Path, landcover_path: Path, resolution: float) -> state
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Both grids derive from the same raw DEM/land-cover files, so if the live
-    # 30m grid loads the 90m one does too - no best-effort case for either.
+    # All grids derive from the same raw DEM/land-cover files, so if the live
+    # 30m grid loads the others do too - no best-effort case for any of them.
     state.GRIDS = {
         30: _load_grid(
             settings.DEM_PROCESSED_PATH, settings.LANDCOVER_PROCESSED_PATH, settings.TARGET_RESOLUTION_METERS
+        ),
+        60: _load_grid(
+            settings.DEM_60M_PROCESSED_PATH,
+            settings.LANDCOVER_60M_PROCESSED_PATH,
+            settings.INTERMEDIATE_RESOLUTION_METERS,
         ),
         90: _load_grid(
             settings.DEM_VALIDATION_PROCESSED_PATH,

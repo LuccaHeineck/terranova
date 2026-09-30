@@ -4,9 +4,9 @@ Serves the real Lajeado/Estrela grid only (loaded once at startup, see
 `api/state.py`) - no synthetic-grid option here, since `api/` may only depend
 on `config/`, `ingestion/`, `simulation/`, `validation/` per
 `docs/ARCHITECTURE.md` (never `examples/`, which nothing else imports), and by
-this roadmap step there's already a real, ingested dataset worth serving. Two
-resolutions of it: the live 30m grid (default) and the 90m validation grid
-(`resolution=90`).
+this roadmap step there's already a real, ingested dataset worth serving. Three
+resolutions of it: the live 30m grid (default), an unvalidated 60m grid
+(`resolution=60`) and the 90m validation grid (`resolution=90`).
 
 A run is created via `POST /simulations` (validated parameters, no simulation
 work happens yet) and consumed exactly once via
@@ -84,7 +84,7 @@ class SeedLocation(BaseModel):
 
 class SimulationParams(BaseModel):
     mode: Literal["seeded_pool", "gauge_driven", "fast"] = "seeded_pool"
-    resolution: Literal[30, 90] = 30
+    resolution: Literal[30, 60, 90] = 30
     steps: int | None = Field(default=None, gt=0)
     frame_interval: int | None = Field(default=None, gt=0)
     outflow_fraction: float = Field(default=DEFAULT_OUTFLOW_FRACTION, gt=0, le=1)

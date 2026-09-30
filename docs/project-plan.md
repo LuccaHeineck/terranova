@@ -1229,6 +1229,21 @@ offline baseline recorded before `engine.py` was touched.
 
   All three are recorded in §22.
 
+**60m grid option.** The API and config panel now serve a third resolution, `resolution: 30 | 60 | 90`
+(default still 30). It sits between the 30m live grid and the 90m validation grid in cost, with about 4x fewer
+cells than 30m.
+- **Built like the 90m grid**: `api/main.py`'s `_load_grid` runs at startup from the same raw DEM/land-cover
+  files, writing to `data/processed/lajeado_estrela_{z,n}_60m.tif` (`settings.INTERMEDIATE_RESOLUTION_METERS`).
+  No new download or script is needed.
+- **Real grid**: 91×96 cells, loaded in ~0.3 s. It has 4 north-edge inflow cells (the channel crossing), and
+  the south outlet is found.
+- **Fast @ 60m**: 5,445 flooded cells, continuity exact (23,472.4 m³/s in and out, 0 retained), ~0.26 s of
+  engine time.
+- **Unvalidated**: no CSI run or gauge geolocation exists at 60m. The documented May 2024 results and the
+  "Replay May 2024 flood" preset stay 90m-only (`docs/tcc-deviations.md` §21).
+- **Tests**: `test_api.py` has a 60m test grid. The "unserved resolution" case now uses 45, since 60 used to be
+  that example.
+
 To run the CA-engine PoC directly (bare-metal, unrelated to Docker): `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 
 To run the real end-to-end CSI validation against the May 2024 event (bare-metal, expect ~30 minutes):

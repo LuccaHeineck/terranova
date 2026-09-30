@@ -46,12 +46,18 @@ def _grid(Z, N=None, inflow_mask=None, boundary_elevation=None, boundary_roughne
     )
 
 
-# A different shape and bounds than the 30m grid, so tests can tell which one a
+# Different shapes and bounds than the 30m grid, so tests can tell which one a
 # request was served from.
+TEST_Z_60 = np.full((4, 4), 10.0)
+TEST_Z_60[2, 2] = 0.0
+TEST_BOUNDS_60 = (-51.985, -29.502, -51.935, -29.458)
+TEST_INFLOW_MASK_60 = np.zeros((4, 4), dtype=bool)
+TEST_INFLOW_MASK_60[0, 1] = True
 TEST_Z_90 = np.array([[10.0, 10.0], [10.0, 0.0]])
 TEST_BOUNDS_90 = (-51.98, -29.50, -51.94, -29.46)
 TEST_GRIDS = {
     30: _grid(TEST_Z),
+    60: _grid(TEST_Z_60, inflow_mask=TEST_INFLOW_MASK_60, dx=60.0, bounds=TEST_BOUNDS_60),
     90: _grid(TEST_Z_90, inflow_mask=np.array([[True, False], [False, False]]), dx=90.0, bounds=TEST_BOUNDS_90),
 }
 
@@ -201,17 +207,24 @@ def test_create_simulation_rejects_missing_frame_interval_with_temporal_modes():
     assert response.status_code == 422
 
 
-def test_create_simulation_serves_the_requested_resolution():
-    response = client.post("/simulations", json={"mode": "fast", "resolution": 90})
+@pytest.mark.parametrize(
+    ("resolution", "shape", "bounds"),
+    [
+        (60, [4, 4], {"west": -51.985, "south": -29.502, "east": -51.935, "north": -29.458}),
+        (90, [2, 2], {"west": -51.98, "south": -29.50, "east": -51.94, "north": -29.46}),
+    ],
+)
+def test_create_simulation_serves_the_requested_resolution(resolution, shape, bounds):
+    response = client.post("/simulations", json={"mode": "fast", "resolution": resolution})
 
     assert response.status_code == 200
     body = response.json()
-    assert body["grid_shape"] == [2, 2]
-    assert body["bounds"] == {"west": -51.98, "south": -29.50, "east": -51.94, "north": -29.46}
+    assert body["grid_shape"] == shape
+    assert body["bounds"] == bounds
 
 
 def test_create_simulation_rejects_unserved_resolution():
-    response = client.post("/simulations", json={"mode": "fast", "resolution": 60})
+    response = client.post("/simulations", json={"mode": "fast", "resolution": 45})
 
     assert response.status_code == 422
 
@@ -442,7 +455,7 @@ def test_list_grids_returns_every_served_grid_with_its_footprint():
 
     assert response.status_code == 200
     grids = response.json()
-    assert [grid["resolution"] for grid in grids] == [30, 90]
+    assert [grid["resolution"] for grid in grids] == [30, 60, 90]
     assert grids[0]["grid_shape"] == [3, 3]
     assert grids[0]["bounds"] == {"west": -51.99, "south": -29.505, "east": -51.93, "north": -29.455}
     footprint = grids[0]["footprint"]

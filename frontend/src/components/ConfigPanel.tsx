@@ -197,6 +197,7 @@ export function ConfigPanel({ status, setup, seedPlacementError, onStart, onRepl
           className={inputClass}
         >
           <option value={30}>30 m (live grid)</option>
+          <option value={60}>60 m (unvalidated)</option>
           <option value={90}>90 m (validation grid)</option>
         </select>
       </label>

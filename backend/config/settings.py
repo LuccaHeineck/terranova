@@ -157,6 +157,15 @@ DEM_VALIDATION_PROCESSED_PATH = PROCESSED_DIR / "lajeado_estrela_z_90m.tif"
 LANDCOVER_VALIDATION_PROCESSED_PATH = PROCESSED_DIR / "lajeado_estrela_n_90m.tif"
 FLOOD_EXTENT_VALIDATION_PROCESSED_PATH = PROCESSED_DIR / "lajeado_flood_extent_90m.tif"
 
+# A 60m grid served live by the API alongside the 30m and 90m ones - a middle
+# ground in wall-clock time (~4x fewer cells than 30m) for interactive runs. Built
+# at startup by the same pipeline from the same raw DEM/land-cover files, like the
+# 90m grid, but unvalidated: no CSI run or gauge geolocation exists at this
+# resolution, and the documented May 2024 results stay 90m-only.
+INTERMEDIATE_RESOLUTION_METERS = 60.0
+DEM_60M_PROCESSED_PATH = PROCESSED_DIR / "lajeado_estrela_z_60m.tif"
+LANDCOVER_60M_PROCESSED_PATH = PROCESSED_DIR / "lajeado_estrela_n_60m.tif"
+
 # Real ANA gauge 86879300 ("ESTRELA", Rio Taquari), lat -29.4717/lon -51.965 (via ANA's
 # public HidroInventario API), reprojected into EPSG:31982 and inverted through the 90m
 # validation grid's affine transform (shape 61x64) -> row 20, col 26 (Z=16.0m, 2 cells

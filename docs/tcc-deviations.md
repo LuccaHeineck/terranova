@@ -1044,6 +1044,12 @@ still carries the depth grid, which is what `flooded_cells` and the agreement co
 The same follow-up added a one-click "Replay May 2024 flood" preset. It runs this section's comparison
 (fast, then temporal to the peak, on the 90m grid) exactly as scored above.
 
+**Follow-up: a 60m grid option, unvalidated.** The API also serves a 60m grid (`resolution=60`). It is built
+at startup by the same ingestion calls as the 90m one, and it sits between the other two in wall-clock cost.
+The fast mode at 60m flooded 5,445 of 8,736 cells, with continuity exact. Like the 30m number above, this
+result has not been scored against the SGB reference, so treat it as a working display, not a validated
+one. Every validated figure in this document remains a 90m result.
+
 ---
 
 ## 22. Von Neumann (4-neighbor) option for the temporal engine — built, unvalidated, Moore stays the default

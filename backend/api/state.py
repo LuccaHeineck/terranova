@@ -8,10 +8,11 @@ from `app.state` so tests can substitute small synthetic arrays via
 `app.dependency_overrides`, without needing the real DEM/land-cover files on
 disk or triggering the app's lifespan at all.
 
-`GRIDS` holds one `Grid` per served resolution: the live 30m grid (steps 3-4)
-and the 90m validation grid (step 10), the latter added so the temporal and
-fast engines can be compared at the real May 2024 peak in minutes rather than
-hours (docs/tcc-deviations.md section 21). Each grid bundles everything that
+`GRIDS` holds one `Grid` per served resolution: the live 30m grid (steps 3-4),
+the 90m validation grid (step 10), added so the temporal and fast engines can
+be compared at the real May 2024 peak in minutes rather than hours
+(docs/tcc-deviations.md section 21), and an unvalidated 60m grid in between for
+interactive runs. Each grid bundles everything that
 depends only on its own terrain - including the outlet boundary override (step
 10) and the north-edge inflow mask (step 9) - so there's no best-effort case
 for any of it.
