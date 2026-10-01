@@ -52,18 +52,78 @@ def test_walled_domain_retains_all_discharge():
     assert result.retained_m3s == pytest.approx(80.0, rel=1e-12)
 
 
-def test_conveying_depth_is_manning_normal_depth():
-    """Hand-computed Manning normal depth, h = (Q n / (w sqrt(S)))^(3/5) with
-    w = dx, for a single-cell channel of known uniform bed slope."""
+def test_single_cell_depth_is_manning_normal_depth():
+    """The section-19 rule: hand-computed Manning normal depth,
+    h = (Q n / (w sqrt(S)))^(3/5) with w = dx, for a single-cell channel of
+    known uniform bed slope."""
     Z, N, dx, inflow, boundary, mid = _v_valley(bed_slope=0.01)
     Q, n, S = 100.0, 0.05, 0.01
     expected = (Q * n / (dx * np.sqrt(S))) ** 0.6
 
-    result = classify_steady_flood(Z, N, dx, Q, inflow, boundary_elevation=boundary)
+    result = classify_steady_flood(Z, N, dx, Q, inflow, boundary_elevation=boundary, conveyance="single_cell")
 
     for row in range(Z.shape[0]):
         assert result.discharge[row, mid] == pytest.approx(Q, rel=1e-12)
         assert result.depth[row, mid] == pytest.approx(expected, rel=1e-12)
+
+
+def _v_valley_discharge_at_stage(stage: float, cols=9, dx=10.0, n=0.05, slope=0.01, bank_step=1.0) -> float:
+    """Hand-computed discharge one row of `_v_valley` conveys at `stage` above
+    its channel bed: each cell is a strip of width dx whose depth is the stage
+    minus its height above the channel (divided-channel Manning)."""
+    mid = cols // 2
+    depths = [stage - abs(c - mid) * bank_step for c in range(cols)]
+    return np.sqrt(slope) / n * dx * sum(d ** (5 / 3) for d in depths if d > 0)
+
+
+def test_cross_section_stage_carries_the_discharge():
+    """Given the discharge a hand-computed stage carries across the V-valley's
+    whole cross-section, the engine recovers that stage - not the much deeper
+    single-cell normal depth."""
+    Z, N, dx, inflow, boundary, mid = _v_valley(bed_slope=0.01)
+    stage = 2.5
+    Q = _v_valley_discharge_at_stage(stage)
+
+    result = classify_steady_flood(Z, N, dx, Q, inflow, boundary_elevation=boundary)
+
+    for row in range(Z.shape[0]):
+        assert result.depth[row, mid] == pytest.approx(stage, rel=1e-9)
+    assert stage < (Q * 0.05 / (dx * np.sqrt(0.01))) ** 0.6
+    assert result.min_slope_cells == 0  # the fitted reach slope is the real 0.01
+
+
+def test_reach_split_keeps_a_uniform_valley_stage():
+    """Splitting a uniform valley into two reaches changes nothing: each has
+    the same slope, cross-section and discharge (crossing bookkeeping)."""
+    Z, N, dx, inflow, boundary, mid = _v_valley(bed_slope=0.01)
+    stage = 2.5
+    Q = _v_valley_discharge_at_stage(stage)
+
+    result = classify_steady_flood(Z, N, dx, Q, inflow, boundary_elevation=boundary, min_reach_length_m=50.0)
+
+    for row in range(Z.shape[0]):
+        assert result.depth[row, mid] == pytest.approx(stage, rel=1e-9)
+
+
+def test_wider_floodplain_lowers_the_stage():
+    """The same discharge spreads over flatter banks at a lower stage - the
+    floodplain conveys, which is what the single-cell rule leaves out."""
+    steep = _v_valley(bank_step=2.0)
+    flat = _v_valley(bank_step=0.5)
+    stages = []
+    for Z, N, dx, inflow, boundary, mid in (steep, flat):
+        result = classify_steady_flood(Z, N, dx, 200.0, inflow, boundary_elevation=boundary)
+        stages.append(result.depth[5, mid])
+    assert stages[1] < stages[0]
+
+
+def test_rougher_floodplain_raises_the_stage():
+    Z, N, dx, inflow, boundary, mid = _v_valley(bank_step=0.5)
+    smooth = classify_steady_flood(Z, N, dx, 200.0, inflow, boundary_elevation=boundary)
+    rough_N = N.copy()
+    rough_N[:, np.arange(Z.shape[1]) != mid] = 0.15
+    rough = classify_steady_flood(Z, rough_N, dx, 200.0, inflow, boundary_elevation=boundary)
+    assert rough.depth[5, mid] > smooth.depth[5, mid]
 
 
 def test_manning_roughness_steers_discharge_toward_smoother_neighbor():
@@ -91,8 +151,9 @@ def test_four_states_on_a_v_valley():
     """Channel cells convey (the last one exits); banks below the channel's
     water surface are inundated to exactly that surface; higher banks stay dry."""
     Z, N, dx, inflow, boundary, mid = _v_valley(bank_step=1.0)
-    result = classify_steady_flood(Z, N, dx, 100.0, inflow, boundary_elevation=boundary)
-    channel_depth = (100.0 * 0.05 / (dx * np.sqrt(0.01))) ** 0.6  # ~2.63 m
+    channel_depth = 2.5
+    result = classify_steady_flood(Z, N, dx, _v_valley_discharge_at_stage(channel_depth), inflow,
+                                   boundary_elevation=boundary)
 
     row = 5
     assert result.state[row, mid] == CONVEYING
@@ -100,7 +161,7 @@ def test_four_states_on_a_v_valley():
     for offset in (1, 2):  # banks 1 m and 2 m above the bed: below the ~2.63 m surface
         for c in (mid - offset, mid + offset):
             assert result.state[row, c] == INUNDATED
-            assert result.depth[row, c] == pytest.approx(channel_depth - offset, rel=1e-12)
+            assert result.depth[row, c] == pytest.approx(channel_depth - offset, rel=1e-9)
             assert result.wse[row, c] == pytest.approx(result.wse[row, mid], rel=1e-12)
     for c in (mid - 3, mid + 3, 0, Z.shape[1] - 1):  # 3 m+ above the bed: above the surface
         assert result.state[row, c] == DRY
@@ -153,6 +214,8 @@ def test_depression_on_flow_path_is_filled_to_its_spill_level():
         {"N": np.zeros((12, 9))},
         {"inflow_mask": np.zeros((12, 9), dtype=bool)},
         {"boundary_elevation": np.zeros((3, 3))},
+        {"conveyance": "two_cell"},
+        {"min_reach_length_m": 0.0},
     ],
 )
 def test_rejects_invalid_input(kwargs):
@@ -164,20 +227,27 @@ def test_rejects_invalid_input(kwargs):
 
 
 # The one test in this suite that needs real data: a regression pinning the
-# fast mode's first real May 2024 result (docs/tcc-deviations.md section 19),
-# so a future change to fast_engine.py that moves it is caught rather than
+# fast mode's real May 2024 results - the cross-section rule's
+# (docs/tcc-deviations.md section 23) and the section-19 single-cell rule's -
+# so a future change to fast_engine.py that moves either is caught rather than
 # silently shifting a documented number. Skipped, not failed, when the raw
-# files haven't been downloaded; naive scoring only, so it never needs the
-# network (the Estrela-gap correction queries SGB live). Note: like
+# files haven't been downloaded; fully offline (the Estrela-gap correction is
+# rebuilt from the saved stage layers). Note: like
 # examples/validate_may2024.py, building the 90m grid (re)writes
 # data/processed/*_90m.tif as a side effect.
-_RAW_FILES = [settings.DEM_RAW_PATH, settings.LANDCOVER_RAW_PATH, settings.HYDROGRAPH_RAW_PATH, settings.FLOOD_EXTENT_RAW_PATH]
+_RAW_FILES = [
+    settings.DEM_RAW_PATH,
+    settings.LANDCOVER_RAW_PATH,
+    settings.HYDROGRAPH_RAW_PATH,
+    settings.FLOOD_EXTENT_RAW_PATH,
+    *(path for _, path in settings.FLOOD_EXTENT_STAGE_LAYERS.values()),
+]
 
 
 @pytest.mark.skipif(not all(p.exists() for p in _RAW_FILES), reason="real May 2024 raw data not downloaded")
 def test_may2024_fast_mode_regression():
     from ingestion.dem import build_elevation_matrix
-    from ingestion.flood_extent import build_observed_flood_mask
+    from ingestion.flood_extent import build_observed_flood_mask, build_validation_reference
     from ingestion.hydrograph import build_hydrograph, find_boundary_inflow_mask, find_boundary_outlet, load_raw_stage_series
     from ingestion.landcover import build_roughness_matrix
     from validation.metrics import confusion_counts, csi
@@ -191,11 +261,22 @@ def test_may2024_fast_mode_regression():
     inflow = find_boundary_inflow_mask(Z, settings.HYDROGRAPH_INFLOW_EDGE)
     boundary_elevation, boundary_roughness = find_boundary_outlet(Z, N, settings.HYDROGRAPH_OUTLET_EDGE)
 
-    result = classify_steady_flood(Z, N, settings.VALIDATION_RESOLUTION_METERS, peak_q, inflow,
-                                   boundary_elevation=boundary_elevation, boundary_roughness=boundary_roughness)
     observed = build_observed_flood_mask(reference_path=settings.DEM_VALIDATION_PROCESSED_PATH)
+    _, excluded = build_validation_reference(Z)
+    scored = ~excluded
 
+    def classify(conveyance):
+        return classify_steady_flood(Z, N, settings.VALIDATION_RESOLUTION_METERS, peak_q, inflow,
+                                     boundary_elevation=boundary_elevation, boundary_roughness=boundary_roughness,
+                                     conveyance=conveyance)
+
+    result = classify("cross_section")
     assert result.retained_m3s == 0.0
     assert result.outflow_m3s == pytest.approx(peak_q, rel=1e-9)
-    assert confusion_counts(result.flooded, observed) == (731, 2109, 100)
-    assert csi(result.flooded, observed) == pytest.approx(0.2486, abs=5e-5)
+    assert confusion_counts(result.flooded, observed) == (800, 1223, 31)
+    assert confusion_counts(result.flooded[scored], observed[scored]) == (800, 62, 31)
+    assert csi(result.flooded[scored], observed[scored]) == pytest.approx(0.8959, abs=5e-5)
+
+    section_19 = classify("single_cell")
+    assert confusion_counts(section_19.flooded, observed) == (731, 2109, 100)
+    assert csi(section_19.flooded, observed) == pytest.approx(0.2486, abs=5e-5)

@@ -19,14 +19,19 @@ Comparison is against this project's own temporal engine only. The fast
 engine is *inspired by* Torres et al. (2022), not a reproduction of it, so
 none of that paper's reported numbers are compared against here.
 
-The Estrela-gap correction reuses
-`examples.rescore_stage_invariant.build_validity_masks`, which queries three
-SGB stage layers live (network); `--skip-gap-correction` runs fully offline
-with naive scoring only.
+The Estrela-gap correction uses `ingestion.flood_extent.build_validation_reference`,
+the same offline masks the API serves (rebuilt from the stage layers
+`scripts/download_flood_extent.py` saves - no network);
+`--skip-gap-correction` scores naively only.
+
+`--conveyance single_cell` reproduces section 19's first result (CSI 0.53);
+the default `cross_section` rule is section 23's. `--min-reach-length-m`
+reproduces section 23's reach-length sweep.
 
 Run from the backend/ directory with the venv active:
 
-    python -m examples.fast_mode_may2024 [--skip-gap-correction] [--save-masks PATH.npz] [--depth-png PATH.png]
+    python -m examples.fast_mode_may2024 [--skip-gap-correction] [--conveyance cross_section|single_cell]
+        [--min-reach-length-m M] [--save-masks PATH.npz] [--depth-png PATH.png]
 """
 
 import argparse
@@ -39,10 +44,18 @@ import numpy as np
 
 from config import settings
 from ingestion.dem import build_elevation_matrix
-from ingestion.flood_extent import build_observed_flood_mask
+from ingestion.flood_extent import build_observed_flood_mask, build_validation_reference
 from ingestion.hydrograph import build_hydrograph, find_boundary_inflow_mask, find_boundary_outlet, load_raw_stage_series
 from ingestion.landcover import build_roughness_matrix
-from simulation.fast_engine import CONVEYING, DRY, EXITING, INUNDATED, classify_steady_flood
+from simulation.fast_engine import (
+    CONVEYANCE_RULES,
+    CONVEYING,
+    DRY,
+    EXITING,
+    INUNDATED,
+    MIN_REACH_LENGTH_M,
+    classify_steady_flood,
+)
 from validation.metrics import confusion_counts, csi, false_alarm_rate, hit_rate
 
 # Same wet-cell cutoff as validate_may2024.py, so both engines' extents are
@@ -78,7 +91,13 @@ def _score(simulated: np.ndarray, observed: np.ndarray) -> dict:
     }
 
 
-def run(skip_gap_correction: bool, save_masks: Path | None, depth_png: Path | None) -> None:
+def run(
+    skip_gap_correction: bool,
+    conveyance: str,
+    min_reach_length_m: float,
+    save_masks: Path | None,
+    depth_png: Path | None,
+) -> None:
     total_start = time.perf_counter()
     Z = build_elevation_matrix(
         processed_path=settings.DEM_VALIDATION_PROCESSED_PATH,
@@ -109,6 +128,8 @@ def run(skip_gap_correction: bool, save_masks: Path | None, depth_png: Path | No
             boundary_elevation=boundary_elevation,
             boundary_roughness=boundary_roughness,
             depth_threshold_m=_FLOODED_DEPTH_THRESHOLD_M,
+            conveyance=conveyance,
+            min_reach_length_m=min_reach_length_m,
         )
 
     first_start = time.perf_counter()
@@ -133,6 +154,7 @@ def run(skip_gap_correction: bool, save_masks: Path | None, depth_png: Path | No
     )
     counts = {name: int((result.state == s).sum()) for name, s in
               [("DRY", DRY), ("CONVEYING", CONVEYING), ("INUNDATED", INUNDATED), ("EXITING", EXITING)]}
+    print(f"conveyance rule: {conveyance}" + (f" (min reach {min_reach_length_m:.0f} m)" if conveyance == "cross_section" else ""))
     print(f"states: {counts}; conveying cells on the slope floor: {result.min_slope_cells}")
     flooded_depths = result.depth[result.flooded]
     print(
@@ -145,10 +167,8 @@ def run(skip_gap_correction: bool, save_masks: Path | None, depth_png: Path | No
     naive = _score(result.flooded, observed)
     gap_only = None
     if not skip_gap_correction:
-        # Deferred import: only this path needs the network-backed SGB stage query.
-        from examples.rescore_stage_invariant import build_validity_masks
-
-        _, _, valid_gap_only, _ = build_validity_masks(Z)
+        _, excluded = build_validation_reference(Z)
+        valid_gap_only = ~excluded
         gap_only = _score(result.flooded[valid_gap_only], observed[valid_gap_only])
     total_s = time.perf_counter() - total_start
 
@@ -176,7 +196,7 @@ def run(skip_gap_correction: bool, save_masks: Path | None, depth_png: Path | No
     if depth_png is not None:
         fig, axes = plt.subplots(1, 2, figsize=(11, 5))
         axes[0].imshow(np.where(result.flooded, result.depth, np.nan), cmap="Blues")
-        axes[0].set_title(f"fast mode depth (m), Q={peak_discharge:.0f} m3/s")
+        axes[0].set_title(f"fast mode depth (m), {conveyance}, Q={peak_discharge:.0f} m3/s")
         im = axes[1].imshow(result.state, cmap="tab10", vmin=0, vmax=9)
         axes[1].set_title("state: 0 DRY, 1 CONVEYING, 2 INUNDATED, 3 EXITING")
         for ax in axes:
@@ -190,7 +210,11 @@ def run(skip_gap_correction: bool, save_masks: Path | None, depth_png: Path | No
 def main() -> None:
     parser = argparse.ArgumentParser(description="Torres-inspired fast mode vs. the real May 2024 event (90m).")
     parser.add_argument("--skip-gap-correction", action="store_true",
-                        help="naive scoring only - skips the live SGB stage-layer query (runs offline)")
+                        help="naive scoring only - skips the Estrela coverage-gap correction")
+    parser.add_argument("--conveyance", choices=CONVEYANCE_RULES, default="cross_section",
+                        help="channel depth rule; single_cell reproduces docs/tcc-deviations.md section 19")
+    parser.add_argument("--min-reach-length-m", type=float, default=MIN_REACH_LENGTH_M,
+                        help="cross_section only: shortest reach a rating curve is fitted over")
     parser.add_argument("--save-masks", type=Path, default=None)
     parser.add_argument("--depth-png", type=Path, default=None)
     args = parser.parse_args()
@@ -199,7 +223,7 @@ def main() -> None:
     _require_raw_file(settings.LANDCOVER_RAW_PATH, "scripts.download_landcover")
     _require_raw_file(settings.HYDROGRAPH_RAW_PATH, "scripts.download_hydrograph")
     _require_raw_file(settings.FLOOD_EXTENT_RAW_PATH, "scripts.download_flood_extent")
-    run(args.skip_gap_correction, args.save_masks, args.depth_png)
+    run(args.skip_gap_correction, args.conveyance, args.min_reach_length_m, args.save_masks, args.depth_png)
 
 
 if __name__ == "__main__":

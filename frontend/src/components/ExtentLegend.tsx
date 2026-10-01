@@ -1,6 +1,6 @@
 import { FAST_EXTENT_COLOR, FLOODED_DEPTH_THRESHOLD_M, OVERLAY_OPACITY } from '../rendering/depthToImage'
 
-/** Key for the fast overlay: one flat color, because the fast mode's depths are not calibrated. */
+/** Key for the fast overlay: one flat color, because only the fast mode's extent is validated. */
 export function ExtentLegend() {
   return (
     <div className="max-w-52 rounded bg-basalt/95 px-3 py-2 text-xs text-mist shadow-lg">
@@ -15,7 +15,7 @@ export function ExtentLegend() {
         </span>
         <span>Flooded (depth &gt; {FLOODED_DEPTH_THRESHOLD_M} m)</span>
       </div>
-      <div className="mt-1.5 text-mist-muted">Extent only: the fast mode's depths are not calibrated.</div>
+      <div className="mt-1.5 text-mist-muted">Extent only: the fast mode's depths are a steady estimate with no observations to validate them against.</div>
     </div>
   )
 }

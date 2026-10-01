@@ -88,7 +88,7 @@ function paneLabel(engine: Engine, frame: CompactFrame | null, neighborhood?: Ne
   return `${temporalName(neighborhood)}: t = ${hours.toFixed(1)} h`
 }
 
-// The temporal overlay is shaded by depth; the fast one shows extent only, since its depths are not calibrated.
+// The temporal overlay is shaded by depth; the fast one shows extent only, since only its extent is validated.
 const RENDER: Record<Engine, (grid: DepthGrid) => string> = {
   temporal: depthToImageDataUrl,
   fast: extentToImageDataUrl,

@@ -20,7 +20,7 @@ work happens yet) and consumed exactly once via
   via `simulation.engine`'s `inflow`/`compute_stable_dt` (roadmap step 9),
   optionally stopping at the observed peak (`stop_at_peak`).
 - `"fast"` - the non-temporal, Torres-inspired `simulation.fast_engine`
-  (docs/tcc-deviations.md section 19) at the same hydrograph's steady peak
+  (docs/tcc-deviations.md sections 19 and 23) at the same hydrograph's steady peak
   discharge. It has no time steps, so its stream is exactly one frame
   (`step: 0`) followed by `done` - the same contract as the temporal modes,
   degenerate rather than different (section 21 explains why this isn't a

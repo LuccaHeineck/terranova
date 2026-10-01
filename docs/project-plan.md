@@ -1282,6 +1282,41 @@ frontend, so the validation is visible in the demo rather than only in `examples
 - **Tests**: `test_flood_extent.py` covers the three pure functions and the offline builder on synthetic
   grids; `test_api.py` covers the endpoint and its 503. Suite: 167/167 passing.
 
+**Fast mode: floodplain conveyance — gap-corrected CSI 0.53 → 0.896, untuned.** Full write-up:
+`docs/tcc-deviations.md` §23.
+- **Diagnosis:** §19's depth rule pushed the whole 23,472 m³/s peak through a channel one cell wide. That
+  needs ~50 m of depth against a ~20 m real rise, and the HAND lateral rule spread the excess onto high
+  ground (547 FP). §19's slope floor only "improved" CSI by standing in for the missing width, so it was
+  not calibrated.
+- **Change** (`simulation/fast_engine.py`): a HAND synthetic rating curve per reach (Zheng et al. 2018).
+  Every cell draining to a reach is part of its cross-section. A divided-channel Manning sum over the wet
+  strips is solved for the stage that carries the reach's discharge, with the reach slope fitted from
+  the channel surface.
+  - Reaches are equal and at least `MIN_REACH_LENGTH_M = 10 km` long. That is the shortest length at
+    which 1 m-quantized TOPODATA heights resolve a ~1e-4 river slope, which makes the ROI's ~8.3 km of
+    river a single reach.
+  - It is the new default `conveyance="cross_section"`. `"single_cell"` keeps §19 reproducible.
+- **Result (90m):**
+  - Gap-only 800 / 62 / 31 → **CSI 0.896** (temporal: 0.900). Naive 0.390 (temporal: 0.395). Hit rate
+    0.963.
+  - ~73 ms. Depth median 10 m (was 33 m). Continuity exact.
+  - Shift-search noise floor +0.0000. The slope floor no longer binds (fitted slope 1.02e-4).
+- **Disclosed:**
+  - Sub-domain reach lengths swing CSI 0.76–0.84 with no plateau, so nothing was calibrated on them.
+  - The 10 km constant was fixed after that sweep, not blind.
+  - Connectivity-aware wetting and a non-increasing-downstream surface were tried and dropped (neutral or
+    worse).
+- **Also:**
+  - 30m and 60m now flood 48.5% and 47.4% of the ROI (was 39.8% and 62.3%), consistent with 90m's 51.8%.
+    Both are still unscored.
+  - `examples/fast_mode_may2024.py` now does the gap correction offline (`build_validation_reference`)
+    and has `--conveyance` / `--min-reach-length-m`.
+  - The frontend copy no longer calls the fast depths "not calibrated". The pane stays extent-only,
+    since depth has no observations to validate against (§20).
+- **Tests:** 6 new in `test_fast_engine.py`: a hand-computed V-valley stage, reach splitting, floodplain
+  width and roughness responses, and two input validations. The May 2024 regression pins both rules, now
+  including gap-corrected counts. Suite: 173/173.
+
 To run the CA-engine PoC directly (bare-metal, unrelated to Docker): `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 
 To run the real end-to-end CSI validation against the May 2024 event (bare-metal, expect ~30 minutes):
@@ -1296,8 +1331,9 @@ behavior when omitted. `examples/shift_search_noise_floor.py --npz PATH` and
 for the registration-shift noise-floor check and the terrain/depth/confusion visualization respectively.
 
 To run the Torres-inspired fast mode against the same event (seconds, not minutes):
-`cd backend && .venv/bin/python -m examples.fast_mode_may2024` (same raw files; the Estrela-gap
-correction queries SGB live - add `--skip-gap-correction` to run offline with naive scoring only).
+`cd backend && .venv/bin/python -m examples.fast_mode_may2024` (same raw files plus the saved stage layers;
+fully offline. `--skip-gap-correction` scores naively only, `--conveyance single_cell` reproduces §19's
+first result, and `--min-reach-length-m` reproduces §23's sweep).
 
 To run the full containerized stack: `docker compose up --build` from the repo root, then open `http://localhost:5173`. If
 host port 5173 is already taken (another stack or a bare `npm run dev`), pick another one:
@@ -1315,13 +1351,13 @@ backend/
   simulation/
     __init__.py
     engine.py         # core CA step (Moore default / von Neumann option), compute_stable_dt, seed_pool_at_lowest_point / seed_pool_at — pure NumPy, no I/O
-    fast_engine.py     # Torres-inspired non-temporal fast mode: classify_steady_flood (hybrid architecture, §19)
+    fast_engine.py     # Torres-inspired non-temporal fast mode: classify_steady_flood (hybrid architecture, §19; rating-curve depth, §23)
   examples/
     __init__.py
     poc_grid.py        # small artificial-grid demo: fake terrain, pool of water, run N steps, plot/check
     poc_real_dem.py     # same idea, on the real Lajeado/Estrela elevation matrix (step 3), + real dt (step 8)
     validate_may2024.py  # real end-to-end CSI run: gauge-driven engine to the real peak vs. real SGB ground truth (step 10)
-    fast_mode_may2024.py  # same event/grid/scoring for the non-temporal fast mode, vs. the temporal engine (§19)
+    fast_mode_may2024.py  # same event/grid/scoring for the non-temporal fast mode, vs. the temporal engine (§19, §23)
   api/
     __init__.py
     main.py             # FastAPI() app, lifespan loads the 30m + 90m grids and the hydrograph (best-effort), includes routers

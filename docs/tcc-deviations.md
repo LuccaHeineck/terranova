@@ -934,7 +934,10 @@ replacement.
 The natural follow-up is to calibrate `_MIN_SLOPE` (or a floodplain-conveyance width in its place)
 the way §16.3 calibrated `outflow_fraction`, using a sweep plus the §15/§16 noise-floor check. It was
 deliberately not done here, so this first number stays uncalibrated and comparable. Regression-pinned
-in `tests/test_fast_engine.py` (naive TP/FP/FN 731/2,109/100).
+in `tests/test_fast_engine.py` (naive TP/FP/FN 731/2,109/100). *(Followed up in §23, which did not
+calibrate the floor. The floor was standing in for the floodplain's missing conveyance width. A HAND
+rating-curve depth rule replaced the one-cell-wide channel: gap-only CSI 0.53 → 0.896, untuned. This
+section's rule is kept as `conveyance="single_cell"`.)*
 
 ---
 
@@ -1244,6 +1247,143 @@ Neumann substep visits 4 neighbors instead of 8. At 30m the per-step p50 was 22.
   substep fraction than Moore's does, so higher values are refused rather than served unconverged.
 - Every validated number in this file (§16.4, §18, §19's agreement counts, §21) is a Moore result. The UI
   labels a von Neumann run accordingly and never uses it in the replay preset.
+
+---
+
+## 23. Fast mode: floodplain conveyance (a HAND rating curve) replaces the one-cell-wide channel
+
+**TCC1:** says nothing about the fast mode, which is this project's own addition (§17, §19). This section
+records why its first depth rule over-flooded and what replaced it. The comparison remains against this
+project's own temporal engine, never against Torres et al.'s numbers.
+
+**Diagnosis: a missing physical term, not a mis-tuned parameter.** §19's rule passed the whole
+23,472 m³/s peak through ~106 conveying cells, each treated as a channel **one cell wide**
+(`h = (Q·n/(dx·√S))^(3/5)`, `dx = 90 m`).
+- At `n ≈ 0.035` and `S = 1e-4` that needs ~50 m of depth. The real stage rise was ~20 m. A ~1 km wide
+  section needs ~13 m.
+- The HAND lateral rule then spread that too-high surface onto the NW side valley and the eastern high
+  ground: §19's 547 gap-only false positives.
+- §19's slope-floor sweep (gap-only CSI 0.53 → 0.76 at `_MIN_SLOPE = 1e-3`) "worked" only because a
+  steeper slope stands in for the missing width. 1e-3 is not a plausible lower-Taquari slope, so that knob
+  was not calibrated.
+
+**Change** (`backend/simulation/fast_engine.py`, `conveyance="cross_section"`, now the default). This is
+the standard HAND synthetic-rating-curve method (Zheng et al. 2018, "River channel geometry and rating
+curve estimation using height above the nearest drainage").
+- **Reach cross-sections:** the conveying channel is split into reaches. Every cell whose
+  steepest-descent path drains to a reach's conveying cells belongs to that reach's cross-section, with
+  its HAND (height above the channel surface it drains to).
+- **Divided-channel Manning:** each cell is a strip of width `dx²/L`. The reach's stage `h` solves
+  `Q = √S · Σ (1/n_k) · (dx²/L) · (h − HAND_k)^(5/3)` over the wet cells, by bisection. Per-cell `n_k`
+  gives floodplain-versus-channel roughness for free.
+- **Forcing and slope:** `Q` is the discharge crossing the reach's downstream end. `S` is the
+  least-squares fall of the conditioned channel surface across the reach.
+- **Unchanged:** routing (pass 1), the four states, discharge continuity, and the lateral rule. The
+  routing pass still uses per-cell slopes floored at `_MIN_SLOPE`.
+- `conveyance="single_cell"` keeps §19's rule, which still reproduces 731 / 2,109 / 100 exactly.
+
+**Reach length: the sweep, and why it was not used to tune.** The fitted reach slope is only as good as
+the DEM's vertical resolution. TOPODATA heights are whole meters: the conditioned channel sits at
+11–14 m along the entire ~8.3 km of river in this ROI. At a ~1e-4 slope, a reach must be ~10 km long
+before its bed falls by more than one quantization step. Shorter reaches fit their slope (mostly hitting
+the floor) and their cross-section to DEM rounding. The final implementation splits the river into equal
+reaches at least `MIN_REACH_LENGTH_M` long (90m grid, gap-only TP/FP/FN):
+
+| `min_reach_length_m` | 500 | 1,000 | 2,000 | 3,000–4,000 | **≥ 5,000 (incl. 10,000 used)** |
+|---|---|---|---|---|---|
+| reaches | 16 | 8 | 4 | 2 | **1** |
+| gap-only TP / FP / FN | 723 / 58 / 108 | 687 / 70 / 144 | 674 / 48 / 157 | 729 / 36 / 102 | **800 / 62 / 31** |
+| gap-only CSI | 0.813 | 0.763 | 0.767 | 0.841 | **0.896** |
+| conveying cells on the slope floor | 92 | 79 | 82 | 53 | **0** |
+
+- **Below the river's length, CSI swings non-monotonically.** A first pass with fixed-length rather than
+  equal bins swung the same way (0.74–0.86 between 180 m and 3 km). That is the signature of bin-boundary
+  noise. There is no plateau, so §16.3's calibration criterion fails, and no sub-domain value was
+  calibrated.
+- **The result is the sweep's limit, not an interior optimum.** Every value above ~4.2 km gives one reach
+  on this ROI and the identical result.
+- **Disclosure:** the sweep was run before `MIN_REACH_LENGTH_M = 10,000` was fixed. The quantization
+  argument explains the sweep's shape, but this number was not set blind the way §19's `_MIN_SLOPE` was.
+- **On a longer river** (another ROI), the same rule gives several reaches ≥ 10 km, each with its own
+  rating curve.
+
+**Two other changes were tried and dropped** (measured with fixed 1 km bins, before the reach rule above):
+- **Connectivity-aware wetting:** wet a lateral cell only if the surface exceeds its outlet-conditioned
+  spill level `Zf`, not just its terrain. On the single-cell rule this went 0.5305 → 0.5215. With
+  cross-sections it was neutral (0.7993 → 0.7971). With one reach, gap-only counts were identical and
+  naive CSI moved by 0.002. It removed more real hits than false alarms, so it was dropped.
+- **Non-increasing surface downstream:** raise each conveying cell to its highest downstream target.
+  With 1 km bins it went 0.7971 → 0.7793 (+28 TP, +56 FP); on the single-cell rule, 0.5305 → 0.4870.
+  With one reach it is a no-op: the stage is uniform and `Zf` is already non-increasing along the routing.
+
+**Result** (90m, May 2024 observed peak, `examples/fast_mode_may2024.py`; temporal figures are §16.4/§18):
+
+| | fast, single-cell (§19) | **fast, cross-section** | temporal (`0.085`) |
+|---|---|---|---|
+| naive TP / FP / FN | 731 / 2,109 / 100 | **800 / 1,223 / 31** | 789 / 1,167 / 42 |
+| naive CSI | 0.249 | **0.390** | 0.395 |
+| gap-only TP / FP / FN | 731 / 547 / 100 | **800 / 62 / 31** | 789 / 46 / 42 |
+| **Estrela-gap-only CSI** | 0.531 | **0.896** | **0.900** |
+| gap-only Hit Rate / FAR | 0.880 / 0.428 | **0.963 / 0.072** | 0.949 / 0.056 |
+| flooded-cell depth, median / p95 | 33.5 / 54.7 m | **10.0 / 24.0 m** | 9.3 / 22.7 m (`project-plan.md`, visual-polish entry) |
+| wall-clock to a final extent | ~74 ms | **~73 ms** | 7.6 min |
+
+**Checks:**
+- **Noise floor:** the shift search (`examples/shift_search_noise_floor.py`'s method, ±3 cells) gives
+  shift sensitivity **+0.0000** under both naive and gap-only scoring. No registration offset improves
+  the score. §19's rule had +0.0195 (naive).
+- **The slope floor no longer binds.** The single reach's fitted slope is 1.02e-4: 3 m of fall over
+  8.2 km, fitted from the data. Any floor ≤ 1e-4 gives the identical result. Forcing the floor above the
+  fitted slope lowers CSI (2e-4 → 0.859, 3e-4 → 0.839). The score is not propped up by the floor.
+- **Physical plausibility:**
+  - The stage is 24.6 m above the conditioned channel surface, a water surface of 35.0–38.0 m along the
+    reach. That is a little above the 33.66 m observed peak stage, if the gauge datum and the DEM agree
+    (not verified here).
+  - The depth distribution is now close to the temporal engine's at the peak.
+  - Continuity is exact: 23,472.37 m³/s out, 0 retained.
+- **Visual:** the depth and state maps are coherent at 30m, 60m and 90m. There is one conveying path from
+  the north inflow to a single exiting cell at the south outlet, and the floodplain extends up the
+  tributary valleys.
+- **Resolution consistency (unvalidated grids):** the old rule flooded 39.8% (30m), 62.3% (60m) and 72.7%
+  (90m) of the ROI. The new one floods 48.5%, 47.4% and 51.8%, with a water surface of 34–39 m on all
+  three. §21's 30m and 60m fast-mode cell counts are superseded: 30m 17,043 of 35,136 cells (~0.65 s),
+  60m 4,137 of 8,736. Both remain unscored.
+
+**Calibration attempted afterwards: no gain beyond noise, nothing adopted.** Following §16.3's method, the
+remaining knobs were swept on the 90m grid, scored gap-only.
+- **Global Manning's n multiplier** (the standard hydraulic calibration parameter):
+  - With one reach, every rating-curve knob only moves the single stage. The DEM is integer meters, so
+    near the optimum the swept family yields just four distinct extents, one per meter of water
+    surface: ×0.80–0.875 → 0.883, ×0.88–0.995 → 0.8974, ×1.00–1.12 → 0.8959 (default), ×1.125–1.245 →
+    0.887.
+  - The default already sits on the plateau. The best point is +0.0015, about one cell.
+  - Scaling only the floodplain classes (`n ≥ 0.15`, ×0.5–2.0) lands on the same two extents.
+- **A tilted water surface:**
+  - The residual errors have a spatial pattern. Misses cluster upstream near the inflow (20 of 31,
+    terrain ~39 m against a ~37 m model surface). False alarms cluster near the outlet (24 of 62). That
+    suggests the real surface falls more steeply than the 1 m-quantized bed.
+  - Using one friction slope for both Manning and the tilt lowers the level more than it tilts the
+    surface, and CSI falls monotonically (1e-4 → 0.895, 3e-4 → 0.831, 1e-3 → 0.612).
+  - A decoupled 2-parameter grid (n multiplier 0.6–1.5 × tilt 1.5e-4–8e-4) is a flat plateau between 0.89
+    and 0.90. Its maximum, **0.9010** (tilt 8e-4, n ×1.1), is +0.005 over the default, about five cells.
+    It sits isolated at the grid's edge and needs a surface eight times steeper than the bed.
+- **Conclusion:** within this rule family the fast mode is at its ceiling on this event. Every gain found
+  is within the noise §16.3 used as its threshold (a naive top-3 spread of 0.0054), so the untuned
+  default stays. Further improvement would need better input data, not tuning. A finer vertical
+  resolution in the DEM would help, since 1 m steps set both the extent's granularity and the slope
+  estimate.
+
+**What remains.**
+- **Accuracy:** the residual 31 FN and 62 FP sit close to the temporal engine's 42 and 46. The fast mode
+  still has no time and no wave-front arrival; that is the temporal engine's distinct contribution, and
+  §17's framing (screening mode alongside the validated temporal model) stands.
+- **Speed vs. accuracy:** §17's trade-off has largely closed. On this event the fast mode now reaches
+  essentially the same extent accuracy roughly 6,000× faster.
+- **Scope of the claim:** one event, one ROI, one grid. Depth is still not validated against
+  observations: there are none (§20). The UI keeps drawing the fast mode as extent only.
+- **Regression:** pinned in `tests/test_fast_engine.py` (cross-section naive 800 / 1,223 / 31, gap-only
+  800 / 62 / 31, and §19's 731 / 2,109 / 100 under `single_cell`). New hand-computed tests cover the
+  rating-curve stage on a V-valley, reach splitting, and the floodplain width and roughness responses.
 
 ---
 

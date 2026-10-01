@@ -16,9 +16,10 @@ export interface DepthBand {
 }
 
 /**
- * The depth color scale of the temporal overlay and its map legend. The fast overlay does not use it: the
- * fast mode's steady Manning depth is not calibrated (median ~33 m against a ~20 m river rise -
- * docs/tcc-deviations.md section 19), so it draws its extent in one flat color instead (FAST_EXTENT_COLOR).
+ * The depth color scale of the temporal overlay and its map legend. The fast overlay does not use it: only
+ * the fast mode's extent is validated. Its steady rating-curve depth is plausible (median ~10 m since
+ * docs/tcc-deviations.md section 23, down from section 19's ~33 m), but no depth observations exist to check it
+ * against (section 20), so it draws its extent in one flat color instead (FAST_EXTENT_COLOR).
  *
  * Fixed bands for this ROI rather than a scale derived from the data, because:
  * - A running max over the run's frames gets captured by the gauge-driven first-step spike. Step 1 pushes
@@ -51,7 +52,7 @@ export const DEPTH_BANDS: readonly DepthBand[] = [
 export const OVERLAY_OPACITY = 0.8
 
 /**
- * The fast overlay's single "flooded" color: extent only, since its depth is not calibrated (see DEPTH_BANDS).
+ * The fast overlay's single "flooded" color: extent only, since only its extent is validated (see DEPTH_BANDS).
  * Burnt orange, checked with the dataviz skill's palette validator and composited at OVERLAY_OPACITY:
  * - against OSM: 3.37:1 on land (#f2efe9) and 2.71:1 on water (#aad3df), above the ramp's own 2.12:1 floor
  *   on water; opaque, >= 3:1 on land, water, residential and forest;
