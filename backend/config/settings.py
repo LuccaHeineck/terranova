@@ -180,6 +180,19 @@ LANDCOVER_60M_PROCESSED_PATH = PROCESSED_DIR / "lajeado_estrela_n_60m.tif"
 VALIDATION_GAUGE_ROW = 20
 VALIDATION_GAUGE_COL = 26
 
+# The Estrela-side coverage-gap correction behind the validated CSI 0.8997
+# (docs/tcc-deviations.md section 16.2) compares the SGB reference at three stages:
+# near-baseflow, mid, and the peak layer above (FLOOD_EXTENT_LAYER_ID). A cell dry at
+# all three on Estrela's bank was never modeled by SGB, so it is excluded from scoring.
+# The same three layers examples/rescore_stage_invariant.py queried live; saved to
+# data/raw/ by scripts/download_flood_extent.py so the API can rebuild the correction
+# offline. Keyed by layer id; the peak layer reuses FLOOD_EXTENT_RAW_PATH.
+FLOOD_EXTENT_STAGE_LAYERS = {
+    3: (19.00, RAW_DIR / "lajeado_flood_extent_cota1900cm.geojson"),
+    10: (26.00, RAW_DIR / "lajeado_flood_extent_cota2600cm.geojson"),
+    FLOOD_EXTENT_LAYER_ID: (33.67, FLOOD_EXTENT_RAW_PATH),
+}
+
 
 def get_opentopography_api_key() -> str:
     """Read the OpenTopography API key from the environment.

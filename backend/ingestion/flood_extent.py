@@ -120,3 +120,68 @@ def build_observed_flood_mask(
         dst.write(mask.astype("uint8"), 1)
 
     return mask
+
+
+def dem_channel_col(Z: np.ndarray) -> np.ndarray:
+    """Per-row DEM-implied channel column, `argmin(Z[row])` - the thalweg
+    proxy the coverage-gap correction splits the two banks with."""
+    return np.argmin(Z, axis=1)
+
+
+def classify_far_bank(Z: np.ndarray, gauge_row: int, gauge_col: int) -> np.ndarray:
+    """True for cells on the opposite side of the DEM-implied channel from the
+    given gauge cell. With the real ANA "ESTRELA" gauge cell
+    (`settings.VALIDATION_GAUGE_ROW/COL`), which sits on Lajeado's bank, this is
+    Estrela's bank."""
+    col_idx = np.arange(Z.shape[1])[None, :]
+    is_west = col_idx < dem_channel_col(Z)[:, None]
+    return ~is_west if bool(is_west[gauge_row, gauge_col]) else is_west
+
+
+def coverage_gap_mask(
+    Z: np.ndarray, stage_masks: list[np.ndarray], gauge_row: int, gauge_col: int
+) -> np.ndarray:
+    """Cells excluded from scoring by the Estrela coverage-gap correction
+    (docs/tcc-deviations.md section 16.2): dry in the reference at every given
+    stage AND on the bank opposite the gauge. The SGB product never modeled
+    Estrela's side, so a cell it leaves dry there from near-baseflow to the peak
+    says nothing either way and can't fairly count as a false alarm.
+
+    Mirrors `examples/rescore_stage_invariant.py`'s `valid_estrela_gap_only`
+    (as its complement), which computes the same thing from stage layers it
+    queries live: there a cell is excluded when its status is identical across
+    the stages and dry at the peak, which for any number of stages is exactly
+    "dry at every stage".
+    """
+    dry_at_every_stage = ~np.logical_or.reduce(stage_masks)
+    return np.logical_and(dry_at_every_stage, classify_far_bank(Z, gauge_row, gauge_col))
+
+
+def build_validation_reference(
+    Z: np.ndarray,
+    reference_path: Path = settings.DEM_VALIDATION_PROCESSED_PATH,
+    stage_layers: dict[int, tuple[float, Path]] = settings.FLOOD_EXTENT_STAGE_LAYERS,
+    peak_layer_id: int = settings.FLOOD_EXTENT_LAYER_ID,
+    gauge_row: int = settings.VALIDATION_GAUGE_ROW,
+    gauge_col: int = settings.VALIDATION_GAUGE_COL,
+) -> tuple[np.ndarray, np.ndarray]:
+    """The observed May 2024 peak extent and the coverage-gap exclusion, both on
+    `reference_path`'s grid (whose elevation is `Z`), from the raw stage-layer
+    GeoJSONs `scripts/download_flood_extent.py` saves - fully offline.
+
+    Returns `(observed, excluded)` boolean masks. The defaults are the 90m
+    validation grid the documented CSI 0.8997 was scored on; the gauge cell is
+    only geolocated on that grid (see `settings.VALIDATION_GAUGE_ROW`).
+    """
+    with rasterio.open(reference_path) as ref:
+        transform, shape, crs = ref.transform, ref.shape, ref.crs
+    if Z.shape != shape:
+        raise ValueError(f"Z has shape {Z.shape} but {reference_path} has shape {shape}")
+
+    masks = {}
+    for layer_id, (_, raw_path) in stage_layers.items():
+        geometry = reproject_geometry(load_raw_geojson(raw_path), settings.FLOOD_EXTENT_SOURCE_CRS, crs)
+        masks[layer_id] = rasterize_flood_extent(geometry, transform, shape)
+
+    excluded = coverage_gap_mask(Z, list(masks.values()), gauge_row, gauge_col)
+    return masks[peak_layer_id], excluded
