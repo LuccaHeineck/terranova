@@ -1,5 +1,167 @@
 @import "tailwindcss";
 
+/*
+ * "Basalt & gauge": dark basalt chrome (the Taquari valley walls are Serra Geral basalt) around the light map,
+ * with a river staff-gauge yellow for whatever is active or actionable. The map's own colors (depth ramp, fast
+ * extent, seed marker) live in rendering/ and are never reused as chrome.
+ */
+@theme {
+  --color-basalt: #1d2427;
+  --color-basalt-raised: #273034;
+  --color-basalt-line: #3a4549;
+  --color-mist: #e4e9e7;
+  --color-mist-muted: #93a19f;
+  --color-gauge: #e9c23a;
+  --color-gauge-strong: #f3d35e;
+  --color-ochre: #d9a35b;
+  --color-danger: #e5484d;
+
+  --font-sans: 'Barlow', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Barlow Semi Condensed', 'Barlow', ui-sans-serif, system-ui, sans-serif;
+}
+
 body {
   margin: 0;
+  background: var(--color-basalt);
+  color: var(--color-mist);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-gauge);
+  outline-offset: 2px;
+}
+
+/* Number boxes have their own steppers (ui/NumberField) or a slider beside them. */
+input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/*
+ * Range inputs. `--fill` (0-100%) is set inline to the thumb's position, so the track left of the thumb fills.
+ * `.range` is the quiet field slider; `.range-ruler` is the timeline's staff-gauge ruler, the one bold element.
+ */
+.range,
+.range-ruler {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+.range:disabled,
+.range-ruler:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.range:focus-visible,
+.range-ruler:focus-visible {
+  outline-offset: 4px;
+}
+
+.range {
+  --track: linear-gradient(to right, var(--color-gauge) 0 var(--fill, 0%), var(--color-basalt-line) var(--fill, 0%) 100%);
+  height: 18px;
+}
+.range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--track);
+}
+.range::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--track);
+}
+.range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background: var(--color-gauge);
+  border: 3px solid var(--color-basalt);
+  box-shadow: 0 0 0 1px var(--color-gauge);
+}
+.range::-moz-range-thumb {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-gauge);
+  border: 3px solid var(--color-basalt);
+  box-shadow: 0 0 0 1px var(--color-gauge);
+}
+
+.range-ruler {
+  /* Major ticks every 10%, minor every 2% along the bottom edge, and the passed part washed in gauge yellow. */
+  --track:
+    repeating-linear-gradient(to right, var(--color-mist-muted) 0 1px, transparent 1px 10%) left bottom / 100% 10px no-repeat,
+    repeating-linear-gradient(to right, var(--color-basalt-line) 0 1px, transparent 1px 2%) left bottom / 100% 5px no-repeat,
+    linear-gradient(to right, rgb(233 194 58 / 0.22) 0 var(--fill, 0%), transparent var(--fill, 0%) 100%),
+    var(--color-basalt-raised);
+  height: 26px;
+}
+.range-ruler::-webkit-slider-runnable-track {
+  height: 22px;
+  border-radius: 2px;
+  border-bottom: 1px solid var(--color-mist-muted);
+  background: var(--track);
+}
+.range-ruler::-moz-range-track {
+  height: 22px;
+  border-radius: 2px;
+  border-bottom: 1px solid var(--color-mist-muted);
+  background: var(--track);
+}
+.range-ruler::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 5px;
+  height: 28px;
+  margin-top: -3px;
+  border-radius: 1px;
+  background: var(--color-gauge);
+  box-shadow: 0 0 0 2px var(--color-basalt);
+}
+.range-ruler::-moz-range-thumb {
+  width: 5px;
+  height: 28px;
+  border: 0;
+  border-radius: 1px;
+  background: var(--color-gauge);
+  box-shadow: 0 0 0 2px var(--color-basalt);
+}
+
+/* Leaflet's own controls, in the chrome's colors. */
+.leaflet-container {
+  font-family: var(--font-sans);
+}
+.leaflet-bar {
+  border: 1px solid var(--color-basalt-line) !important;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25) !important;
+}
+.leaflet-bar a,
+.leaflet-bar a:hover {
+  background: var(--color-basalt);
+  color: var(--color-mist);
+  border-bottom-color: var(--color-basalt-line);
+}
+.leaflet-bar a:hover {
+  background: var(--color-basalt-raised);
+}
+.leaflet-bar a.leaflet-disabled {
+  background: var(--color-basalt);
+  color: var(--color-basalt-line);
+}
+.leaflet-control-attribution.leaflet-control {
+  background: rgb(29 36 39 / 0.8);
+  color: var(--color-mist-muted);
+}
+.leaflet-control-attribution a {
+  color: var(--color-mist);
 }

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
+import { NEIGHBORHOOD_LABEL } from '../types/simulation'
 import type { Neighborhood, Resolution, SimulationParams } from '../types/simulation'
 import type { SimulationStatus } from '../hooks/useSimulationRun'
 import type { RunSetup, TemporalScenario } from '../hooks/useRunSetup'
@@ -12,6 +13,18 @@ import {
   VALIDATED_NEIGHBORHOOD_NOTE,
   VON_NEUMANN_MAX_OUTFLOW_FRACTION,
 } from '../presets'
+import { Callout } from './ui/Callout'
+import { NeighborhoodGlyph } from './ui/icons'
+import { NumberField } from './ui/NumberField'
+import { OptionCard } from './ui/OptionCard'
+import { Section } from './ui/Section'
+import { Segmented } from './ui/Segmented'
+import type { SegmentOption } from './ui/Segmented'
+import { SliderField } from './ui/SliderField'
+import { Toggle } from './ui/Toggle'
+
+/** The setup form's id: the top bar's Start button submits it from outside the sidebar. */
+export const RUN_SETUP_FORM_ID = 'run-setup'
 
 interface ConfigPanelProps {
   status: SimulationStatus
@@ -22,7 +35,6 @@ interface ConfigPanelProps {
   onStart: (params: SimulationParams) => void
   /** Runs the May 2024 replay preset (fast, then temporal to the peak, in Compare). */
   onReplay: () => void
-  onStop: () => void
 }
 
 // A seeded-pool run is a few hundred steps, so a frame every 5 is fine. A
@@ -35,10 +47,29 @@ const DEFAULT_FRAME_INTERVAL: Record<TemporalScenario, number> = {
   gauge_driven: GAUGE_DRIVEN_FRAME_INTERVAL,
 }
 
-const inputClass = 'rounded border border-gray-300 px-2 py-1 disabled:opacity-50'
-
 /** The seed pool is a 5x5 patch (simulation/engine.py), before clipping at a grid edge. */
 const SEED_PATCH_CELLS = 25
+
+const GRID_OPTIONS: readonly SegmentOption<Resolution>[] = [
+  { value: 30, label: '30 m', caption: 'Live' },
+  { value: 60, label: '60 m', caption: 'Unvalidated', captionTone: 'warn' },
+  { value: 90, label: '90 m', caption: 'Validation' },
+]
+
+const SCENARIO_OPTIONS: readonly SegmentOption<TemporalScenario>[] = [
+  { value: 'seeded_pool', label: 'Seeded pool', caption: 'Synthetic' },
+  { value: 'gauge_driven', label: 'May 2024 gauges', caption: 'Real event' },
+]
+
+const NEIGHBORHOOD_OPTIONS: readonly SegmentOption<Neighborhood>[] = [
+  { value: 'moore', label: <><NeighborhoodGlyph kind="moore" />Moore</>, caption: '8 neighbors, validated' },
+  {
+    value: 'von_neumann',
+    label: <><NeighborhoodGlyph kind="von_neumann" />von Neumann</>,
+    caption: '4 neighbors, not validated',
+    captionTone: 'warn',
+  },
+]
 
 function formatNumber(value: number): string {
   return value.toLocaleString('en-US', { maximumFractionDigits: 1 })
@@ -55,28 +86,29 @@ interface SeedLocationFieldProps {
 /** Where the pool goes: the marker placed on the map, or - with none - the terrain's lowest point. */
 function SeedLocationField({ seed, resolution, error, busy, onClear }: SeedLocationFieldProps) {
   return (
-    <div className="flex flex-col gap-1 text-sm text-gray-700">
-      <span>Seed location</span>
+    <div className="flex flex-col gap-1">
+      <span className="text-[13px] font-medium text-mist">Seed location</span>
       {seed ? (
-        <div className="flex items-center justify-between gap-2 rounded border border-gray-300 bg-white px-2 py-1">
-          <span className="font-mono text-xs">
+        <div className="flex items-center justify-between gap-2 rounded border border-basalt-line bg-basalt-raised py-1 pr-1 pl-2">
+          <span className="flex items-center gap-2 text-xs text-mist tabular-nums">
+            <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-[#e11d48] ring-2 ring-white" />
             {seed.lat.toFixed(5)}, {seed.lon.toFixed(5)}
           </span>
           <button
             type="button"
             onClick={onClear}
             disabled={busy}
-            className="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-800 hover:bg-gray-200 disabled:opacity-50"
+            className="rounded px-2 py-0.5 text-xs text-mist-muted hover:bg-basalt-line hover:text-mist disabled:opacity-50"
           >
             Clear
           </button>
         </div>
       ) : (
-        <span className="rounded border border-dashed border-gray-300 bg-white px-2 py-1 text-xs">
+        <span className="rounded border border-dashed border-basalt-line px-2 py-1 text-xs text-mist-muted">
           Lowest point of the terrain (default)
         </span>
       )}
-      <span className="text-xs text-gray-500">
+      <span className="text-xs leading-snug text-mist-muted">
         {error
           ? `Can't place a seed on the map yet: the grid outline didn't load (${error}). Retrying…`
           : seed
@@ -87,7 +119,7 @@ function SeedLocationField({ seed, resolution, error, busy, onClear }: SeedLocat
   )
 }
 
-export function ConfigPanel({ status, setup, seedPlacementError, onStart, onReplay, onStop }: ConfigPanelProps) {
+export function ConfigPanel({ status, setup, seedPlacementError, onStart, onReplay }: ConfigPanelProps) {
   const { engine, scenario, resolution, seed, setEngine, setScenario, setResolution } = setup
   const [steps, setSteps] = useState(200)
   const [seedVolume, setSeedVolume] = useState(DEFAULT_SEED_VOLUME)
@@ -145,232 +177,190 @@ export function ConfigPanel({ status, setup, seedPlacementError, onStart, onRepl
     })
   }
 
+  // Tuning is collapsed by default, so say when it holds something other than the defaults.
+  const tuningChanged =
+    neighborhood !== 'moore' ||
+    outflowFraction !== DEFAULT_OUTFLOW_FRACTION ||
+    frameInterval !== DEFAULT_FRAME_INTERVAL[scenario]
+
+  const neighborhoodName = `${NEIGHBORHOOD_LABEL[neighborhood]} neighborhood`
+  const summary =
+    engine === 'fast'
+      ? `Runs the fast engine at the observed May 2024 peak on the ${resolution} m grid.`
+      : scenario === 'seeded_pool'
+        ? `Runs a ${steps.toLocaleString('en-US')}-step seeded pool on the ${resolution} m grid, ${neighborhoodName}.`
+        : `Runs the May 2024 gauge record ${stopAtPeak ? 'up to the observed peak' : 'in full (about 14 days)'} on the ${resolution} m grid, ${neighborhoodName}.`
+
   return (
-    <form onSubmit={handleSubmit} className="flex h-full flex-col gap-4 overflow-y-auto border-r border-gray-200 bg-gray-50 p-4">
-      <h1 className="text-lg font-semibold text-gray-900">Terranova</h1>
-      <p className="text-sm text-gray-500">Vale do Taquari flood simulation</p>
+    <form id={RUN_SETUP_FORM_ID} onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+      <div className="relative flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pt-1 pb-4">
+        {busy && <Callout tone="info">Settings are locked while a run is going. Stop it to change them.</Callout>}
 
-      <div className="flex flex-col gap-1.5 rounded-md border border-blue-200 bg-white p-3">
-        <button
-          type="button"
-          onClick={startReplay}
-          disabled={busy}
-          className="rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-        >
-          Replay May 2024 flood
-        </button>
-        <p className="text-xs text-gray-600">
-          Validated scenario: 90 m grid, the fast engine and the temporal CA to the observed peak, side by side.
-        </p>
-      </div>
-
-      <fieldset className="flex flex-col gap-1 text-sm text-gray-700">
-        <legend className="mb-1 font-medium">Engine</legend>
-        <label className="flex items-center gap-2">
-          <input
-            type="radio"
-            name="engine"
-            checked={engine === 'temporal'}
+        <div className="flex flex-col gap-2 rounded-md border-l-2 border-gauge bg-basalt-raised p-3">
+          <span className="font-display text-[15px] font-semibold text-mist">May 2024 flood</span>
+          <p className="text-xs leading-snug text-mist-muted">
+            Validated scenario: 90 m grid, the fast engine and the temporal CA to the observed peak, side by side.
+          </p>
+          <button
+            type="button"
+            onClick={startReplay}
             disabled={busy}
-            onChange={() => setEngine('temporal')}
-          />
-          Temporal CA (time-stepped)
-        </label>
-        <label className="flex items-center gap-2">
-          <input
-            type="radio"
-            name="engine"
-            checked={engine === 'fast'}
-            disabled={busy}
-            onChange={() => setEngine('fast')}
-          />
-          Fast (non-temporal)
-        </label>
-      </fieldset>
+            className="self-start rounded border border-gauge px-3 py-1.5 text-[13px] font-medium text-gauge transition-colors hover:bg-gauge hover:text-basalt disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-gauge"
+          >
+            Replay May 2024 flood
+          </button>
+        </div>
 
-      <label className="flex flex-col gap-1 text-sm text-gray-700">
-        Grid
-        <select
-          value={resolution}
-          disabled={busy}
-          onChange={(e) => setResolution(Number(e.target.value) as Resolution)}
-          className={inputClass}
-        >
-          <option value={30}>30 m (live grid)</option>
-          <option value={60}>60 m (unvalidated)</option>
-          <option value={90}>90 m (validation grid)</option>
-        </select>
-      </label>
+        <Section title="Engine">
+          <div role="radiogroup" aria-label="Engine" className="grid grid-cols-2 gap-2">
+            <OptionCard
+              name="engine"
+              checked={engine === 'temporal'}
+              disabled={busy}
+              onSelect={() => setEngine('temporal')}
+              title="Temporal CA"
+              description="Time-stepped flow, streams frames"
+            />
+            <OptionCard
+              name="engine"
+              checked={engine === 'fast'}
+              disabled={busy}
+              onSelect={() => setEngine('fast')}
+              title="Fast"
+              description="Steady extent at the observed peak"
+            />
+          </div>
+        </Section>
 
-      {engine === 'fast' ? (
-        <p className="text-sm text-gray-600">
-          Real May 2024 event: one steady classification at the observed peak discharge. No time steps, so there is
-          no frame interval or outflow fraction.
-        </p>
-      ) : (
-        <>
-          <fieldset className="flex flex-col gap-1 text-sm text-gray-700">
-            <legend className="mb-1 font-medium">Neighborhood</legend>
-            <label className="flex items-center gap-2">
-              <input
-                type="radio"
-                name="neighborhood"
-                checked={neighborhood === 'moore'}
-                disabled={busy}
-                onChange={() => setNeighborhood('moore')}
-              />
-              Moore (8 neighbors), validated
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="radio"
-                name="neighborhood"
-                checked={neighborhood === 'von_neumann'}
-                disabled={busy}
-                onChange={selectVonNeumann}
-              />
-              von Neumann (4 neighbors), not validated
-            </label>
-            <span className={`text-xs ${neighborhood === 'moore' ? 'text-gray-500' : 'text-amber-800'}`}>
-              {VALIDATED_NEIGHBORHOOD_NOTE}
-            </span>
-          </fieldset>
+        <Section title="Grid">
+          <Segmented name="resolution" label="Grid" value={resolution} options={GRID_OPTIONS} onChange={setResolution} disabled={busy} />
+        </Section>
 
-          <fieldset className="flex flex-col gap-1 text-sm text-gray-700">
-            <legend className="mb-1 font-medium">Scenario</legend>
-            <label className="flex items-center gap-2">
-              <input
-                type="radio"
+        {engine === 'fast' ? (
+          <p className="text-xs leading-snug text-mist-muted">
+            Real May 2024 event: one steady classification at the observed peak discharge. No time steps, so there is
+            no frame interval or outflow fraction.
+          </p>
+        ) : (
+          <>
+            <Section title="Scenario">
+              <Segmented
                 name="scenario"
-                checked={scenario === 'seeded_pool'}
+                label="Scenario"
+                value={scenario}
+                options={SCENARIO_OPTIONS}
+                onChange={selectScenario}
                 disabled={busy}
-                onChange={() => selectScenario('seeded_pool')}
               />
-              Synthetic seeded pool
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="radio"
-                name="scenario"
-                checked={scenario === 'gauge_driven'}
-                disabled={busy}
-                onChange={() => selectScenario('gauge_driven')}
-              />
-              Real May 2024 event (gauge-driven)
-            </label>
-          </fieldset>
 
-          {scenario === 'seeded_pool' ? (
-            <>
-              <label className="flex flex-col gap-1 text-sm text-gray-700">
-                Steps
-                <input
-                  type="number"
-                  min={1}
-                  value={steps}
-                  disabled={busy}
-                  onChange={(e) => setSteps(Number(e.target.value))}
-                  className={inputClass}
-                />
-              </label>
+              {scenario === 'seeded_pool' ? (
+                <div className="mt-1 flex flex-col gap-4">
+                  <NumberField label="Steps" value={steps} onChange={setSteps} min={1} stepBy={50} disabled={busy} />
 
-              <div className="flex flex-col gap-1 text-sm text-gray-700">
-                <label className="flex flex-col gap-1">
-                  Seed volume
-                  <input
-                    type="number"
+                  <SliderField
+                    label="Seed volume"
+                    value={seedVolume}
+                    onChange={setSeedVolume}
                     min={1}
                     max={MAX_SEED_VOLUME}
-                    step="any"
-                    value={seedVolume}
+                    scale="log"
+                    quantum={1}
+                    inputStep="any"
+                    marks={[{ value: DEFAULT_SEED_VOLUME, label: 'default' }]}
                     disabled={busy}
-                    onChange={(e) => setSeedVolume(Number(e.target.value))}
-                    aria-describedby="seed-volume-hint"
-                    className={inputClass}
+                    describedBy="seed-volume-hint"
+                  >
+                    <div id="seed-volume-hint" className="flex flex-col gap-0.5 text-xs leading-snug text-mist-muted">
+                      <span>Summed cell depth (m), as the log's volume.</span>
+                      <span className="text-mist tabular-nums">
+                        {formatNumber(seedVolume / SEED_PATCH_CELLS)} m deep over the 5×5 seed patch, ≈{' '}
+                        {formatNumber(seedVolume * resolution * resolution)} m³ on the {resolution} m grid.
+                      </span>
+                    </div>
+                  </SliderField>
+
+                  <SeedLocationField
+                    seed={seed}
+                    resolution={resolution}
+                    error={seedPlacementError}
+                    busy={busy}
+                    onClear={setup.clearSeed}
                   />
-                </label>
-                <span id="seed-volume-hint" className="text-xs text-gray-500">
-                  Summed cell depth (m), as the log's volume: {formatNumber(seedVolume / SEED_PATCH_CELLS)} m deep over
-                  the 5×5 seed patch, ≈ {formatNumber(seedVolume * resolution * resolution)} m³ on the {resolution} m
-                  grid.
-                </span>
+                </div>
+              ) : (
+                <div className="mt-1">
+                  <Toggle checked={stopAtPeak} onChange={setStopAtPeak} disabled={busy}>
+                    Stop at the observed peak
+                  </Toggle>
+                </div>
+              )}
+            </Section>
+
+            <Section
+              title="Engine tuning"
+              collapsible
+              aside={
+                tuningChanged && (
+                  <span className="ml-auto flex items-center gap-1.5 text-xs text-gauge">
+                    <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-gauge" />
+                    Changed
+                  </span>
+                )
+              }
+            >
+              <div className="flex flex-col gap-1.5">
+                <span className="text-[13px] font-medium text-mist">Neighborhood</span>
+                <Segmented
+                  name="neighborhood"
+                  label="Neighborhood"
+                  value={neighborhood}
+                  options={NEIGHBORHOOD_OPTIONS}
+                  onChange={(next) => (next === 'von_neumann' ? selectVonNeumann() : setNeighborhood('moore'))}
+                  disabled={busy}
+                />
+                {neighborhood === 'moore' ? (
+                  <span className="text-xs leading-snug text-mist-muted">{VALIDATED_NEIGHBORHOOD_NOTE}</span>
+                ) : (
+                  <Callout tone="warn">{VALIDATED_NEIGHBORHOOD_NOTE}</Callout>
+                )}
               </div>
 
-              <SeedLocationField
-                seed={seed}
-                resolution={resolution}
-                error={seedPlacementError}
-                busy={busy}
-                onClear={setup.clearSeed}
-              />
-            </>
-          ) : (
-            <label className="flex items-center gap-2 text-sm text-gray-700">
-              <input
-                type="checkbox"
-                checked={stopAtPeak}
+              <NumberField
+                label="Frame interval"
+                value={frameInterval}
+                onChange={setFrameInterval}
+                min={1}
+                stepBy={scenario === 'gauge_driven' ? 100 : 1}
+                unit="steps"
                 disabled={busy}
-                onChange={(e) => setStopAtPeak(e.target.checked)}
               />
-              Stop at the observed peak
-            </label>
-          )}
 
-          <label className="flex flex-col gap-1 text-sm text-gray-700">
-            Frame interval
-            <input
-              type="number"
-              min={1}
-              value={frameInterval}
-              disabled={busy}
-              onChange={(e) => setFrameInterval(Number(e.target.value))}
-              className={inputClass}
-            />
-          </label>
+              <SliderField
+                label="Outflow fraction"
+                value={outflowFraction}
+                onChange={setOutflowFraction}
+                min={0.01}
+                max={maxOutflowFraction}
+                scale="log"
+                quantum={0.005}
+                inputStep={0.005}
+                marks={[{ value: DEFAULT_OUTFLOW_FRACTION, label: 'default' }]}
+                disabled={busy}
+                describedBy={neighborhood === 'von_neumann' ? 'outflow-fraction-hint' : undefined}
+              >
+                {neighborhood === 'von_neumann' && (
+                  <span id="outflow-fraction-hint" className="text-xs leading-snug text-mist-muted">
+                    At most {VON_NEUMANN_MAX_OUTFLOW_FRACTION} with von Neumann: above that its result depends on the
+                    engine's substep size.
+                  </span>
+                )}
+              </SliderField>
+            </Section>
+          </>
+        )}
+      </div>
 
-          <label className="flex flex-col gap-1 text-sm text-gray-700">
-            Outflow fraction
-            <input
-              type="number"
-              min={0.01}
-              max={maxOutflowFraction}
-              step={0.005}
-              value={outflowFraction}
-              disabled={busy}
-              onChange={(e) => setOutflowFraction(Number(e.target.value))}
-              aria-describedby={neighborhood === 'von_neumann' ? 'outflow-fraction-hint' : undefined}
-              className={inputClass}
-            />
-          </label>
-          {neighborhood === 'von_neumann' && (
-            <span id="outflow-fraction-hint" className="-mt-3 text-xs text-gray-500">
-              At most {VON_NEUMANN_MAX_OUTFLOW_FRACTION} with von Neumann: above that its result depends on the
-              engine's substep size.
-            </span>
-          )}
-        </>
-      )}
-
-      {/* Distinct keys: if React reused one <button> and flipped its type from "button" to "submit"
-          during the Stop click, the click's default action would submit the form and start a new run. */}
-      {busy ? (
-        <button
-          key="stop"
-          type="button"
-          onClick={onStop}
-          className="mt-2 rounded bg-gray-700 px-3 py-2 text-sm font-medium text-white hover:bg-gray-800"
-        >
-          Stop
-        </button>
-      ) : (
-        <button
-          key="start"
-          type="submit"
-          className="mt-2 rounded bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
-        >
-          Start simulation
-        </button>
-      )}
+      <p className="border-t border-basalt-line bg-basalt px-4 py-3 text-xs leading-snug text-mist-muted">{summary}</p>
     </form>
   )
 }

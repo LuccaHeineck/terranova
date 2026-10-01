@@ -177,7 +177,7 @@ export function MapPane({
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full" />
       {label && (
-        <div className="pointer-events-none absolute top-3 left-14 z-1000 rounded-md bg-white/95 px-2.5 py-1 text-xs font-medium text-gray-900 shadow-md">
+        <div className="pointer-events-none absolute top-3 left-14 z-1000 rounded bg-basalt/95 px-2.5 py-1 font-display text-[13px] font-semibold text-mist shadow-lg tabular-nums">
           {label}
         </div>
       )}

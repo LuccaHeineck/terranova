@@ -211,6 +211,17 @@ grid's true outline comes from `GET /grids` so clicks outside it are rejected be
 converts the marker's lat/lon to a cell itself (`ingestion/dem.py`'s `lonlat_to_cell`, through the grid's real
 UTM transform), rejecting an outside point with a 422.
 
+The shell (`App.tsx`) is a top bar (`TopBar`: run status and the Start/Stop button, which submits the setup
+form from outside it through `form="run-setup"`) above a left menu (`Sidebar`: an icon rail with Setup /
+Results / Log tabs) and the map. Every tab panel stays mounted and is only hidden: `ConfigPanel` keeps its
+fields in local state, which would reset on unmount, and Start needs the form to exist. Starting a run switches
+to Results; below 900px the panel is a drawer over the map. Visual tokens (the "basalt" chrome colors, gauge
+yellow accent, Barlow / Barlow Semi Condensed type self-hosted via `@fontsource`) are a Tailwind `@theme` in
+`src/index.css`, along with the range-input styling (the timeline's ruler track) and Leaflet control overrides.
+`src/components/ui/` holds the small presentational form primitives (segmented control, option card, slider
+field, number field, toggle, section, callout, inline SVG icons); they hold no simulation logic. The map's own
+colors (depth ramp, fast extent, seed marker) stay in `rendering/` and are not chrome tokens.
+
 What does NOT belong here: any backend logic. The frontend only ever calls `backend/api/`'s HTTP/WebSocket
 contract; it never imports Python code or reads `data/` directly.
 

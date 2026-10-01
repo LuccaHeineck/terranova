@@ -1244,6 +1244,13 @@ cells than 30m.
 - **Tests**: `test_api.py` has a 60m test grid. The "unserved resolution" case now uses 45, since 60 used to be
   that example.
 
+**Frontend redesign ("Basalt & gauge").** UI-only; no API or engine changes.
+- **Layout**: a top bar (status, grid size, the one Start/Stop button) over a left menu (Setup / Results / Log)
+  and a full-width map. Every tab panel stays mounted, so the setup form keeps its values across tabs.
+- **Setup**: option cards, segmented controls instead of the grid dropdown, log-scale sliders for seed volume
+  and outflow fraction, and a collapsed "Engine tuning" section that flags non-default values. Self-hosted
+  Barlow type and a Tailwind `@theme` token set; see `docs/ARCHITECTURE.md`'s frontend section.
+
 To run the CA-engine PoC directly (bare-metal, unrelated to Docker): `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 
 To run the real end-to-end CSI validation against the May 2024 event (bare-metal, expect ~30 minutes):

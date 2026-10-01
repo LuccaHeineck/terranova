@@ -7,20 +7,20 @@ function bandLabel(min: number, max: number | null): string {
 /** Depth -> color key for the flood overlay, read from the same DEPTH_BANDS the rasterizer uses. */
 export function DepthLegend() {
   return (
-    <div className="rounded-md bg-white/95 px-3 py-2 text-xs text-gray-700 shadow-md">
-      <div className="mb-1.5 font-semibold text-gray-900">Water depth (m)</div>
+    <div className="rounded bg-basalt/95 px-3 py-2 text-xs text-mist shadow-lg">
+      <div className="mb-1.5 font-display text-[13px] font-semibold">Water depth (m)</div>
       <ul className="flex flex-col gap-1">
         {[...DEPTH_BANDS].reverse().map(({ min, max, color }) => (
           <li key={min} className="flex items-center gap-2">
-            <span
-              className="inline-block h-3 w-5 rounded-sm"
-              style={{ background: color, opacity: OVERLAY_OPACITY }}
-            />
+            {/* On a white backing, so the swatch shows the color as composited over the light map. */}
+            <span className="inline-flex rounded-sm bg-white p-px">
+              <span className="inline-block h-3 w-5 rounded-[1px]" style={{ background: color, opacity: OVERLAY_OPACITY }} />
+            </span>
             <span className="tabular-nums">{bandLabel(min, max)}</span>
           </li>
         ))}
       </ul>
-      <div className="mt-1.5 text-gray-500">Under {FLOODED_DEPTH_THRESHOLD_M} m: dry</div>
+      <div className="mt-1.5 text-mist-muted">Under {FLOODED_DEPTH_THRESHOLD_M} m: dry</div>
     </div>
   )
 }

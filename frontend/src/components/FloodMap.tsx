@@ -169,7 +169,7 @@ export function FloodMap({
   return (
     <div className="relative flex h-full w-full flex-col">
       {/* The primary pane stays mounted across view changes; Compare adds the fast pane beside it. */}
-      <div className={`grid min-h-0 w-full flex-1 ${compare ? 'grid-cols-2 gap-0.5 bg-gray-400' : 'grid-cols-1'}`}>
+      <div className={`grid min-h-0 w-full flex-1 ${compare ? 'grid-cols-2 gap-0.5 bg-basalt-line' : 'grid-cols-1'}`}>
         <MapPane
           bounds={bounds}
           imageUrl={primary === 'fast' ? fastUrl : temporalUrl}
@@ -193,10 +193,10 @@ export function FloodMap({
 
       {/* The timeline sits under the temporal pane only: the fast mode has a single frame to show. */}
       {showsTemporal && timeline.frame && (
-        <div className={`grid w-full ${compare ? 'grid-cols-2 gap-0.5 bg-gray-400' : 'grid-cols-1'}`}>
+        <div className={`grid w-full ${compare ? 'grid-cols-2 gap-0.5 bg-basalt-line' : 'grid-cols-1'}`}>
           <Timeline timeline={timeline} compare={compare} />
           {compare && (
-            <div className="flex items-center justify-center border-t border-gray-300 bg-gray-50 p-3 text-center text-xs text-gray-500">
+            <div className="flex items-center justify-center border-t border-basalt-line bg-basalt p-3 text-center text-xs text-mist-muted">
               Fast mode: one steady frame at the peak. It does not follow the timeline.
             </div>
           )}
@@ -206,32 +206,34 @@ export function FloodMap({
       {seedNotice && (
         <div
           role="status"
-          className="pointer-events-none absolute top-3 left-1/2 z-1000 -translate-x-1/2 rounded-md bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-900 shadow-md ring-1 ring-amber-300"
+          className="pointer-events-none absolute top-3 left-1/2 z-1000 -translate-x-1/2 rounded border-l-2 border-ochre bg-basalt/95 px-3 py-1.5 text-xs font-medium text-mist shadow-lg"
         >
           {seedNotice}
         </div>
       )}
 
       {(available.temporal || available.fast) && (
-        <div className="absolute top-3 right-3 z-1000 flex flex-col gap-1.5 rounded-md bg-white/95 p-2 text-xs shadow-md">
-          <div className="flex gap-1" role="group" aria-label="Map view">
-            {(Object.keys(VIEW_LABEL) as MapView[]).map((v) => (
+        <div className="absolute top-3 right-3 z-1000 flex flex-col items-end gap-1.5 text-xs">
+          <div className="flex items-center gap-0.5 rounded-md bg-basalt/95 p-0.5 shadow-lg backdrop-blur-sm">
+            <div className="flex gap-0.5" role="group" aria-label="Map view">
+              {(Object.keys(VIEW_LABEL) as MapView[]).map((v) => (
               <button
                 key={v}
                 type="button"
                 disabled={!available[v]}
                 onClick={() => setChoice({ view: v, runCount })}
                 aria-pressed={shown === v}
-                className={`rounded px-2 py-1 disabled:opacity-40 ${
-                  shown === v ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-800 hover:bg-gray-200'
+                className={`rounded px-2.5 py-1 text-[13px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
+                  shown === v ? 'bg-gauge text-basalt' : 'text-mist hover:bg-basalt-raised disabled:hover:bg-transparent'
                 }`}
               >
                 {VIEW_LABEL[v]}
               </button>
             ))}
+            </div>
           </div>
           {shown && !compare && (
-            <div className="text-gray-700">
+            <div className="rounded bg-basalt/85 px-2 py-0.5 text-mist-muted shadow-lg">
               {shown === 'fast'
                 ? 'Fast mode: steady peak extent'
                 : layers.temporal?.neighborhood === 'von_neumann'
@@ -239,7 +241,9 @@ export function FloodMap({
                   : 'Temporal CA depth'}
             </div>
           )}
-          {compare && <div className="text-gray-700">Pan or zoom either map; both follow.</div>}
+          {compare && (
+            <div className="rounded bg-basalt/85 px-2 py-0.5 text-mist-muted shadow-lg">Pan or zoom either map; both follow.</div>
+          )}
         </div>
       )}
     </div>
