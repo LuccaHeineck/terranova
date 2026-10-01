@@ -222,6 +222,11 @@ yellow accent, Barlow / Barlow Semi Condensed type self-hosted via `@fontsource`
 field, number field, toggle, section, callout, inline SVG icons); they hold no simulation logic. The map's own
 colors (depth ramp, fast extent, seed marker) stay in `rendering/` and are not chrome tokens.
 
+The map's background is chosen from `src/geo/basemaps.ts` (Relief, Topographic, Streets, Satellite; remembered
+per browser in `localStorage`): each basemap is a base tile layer, optionally Esri's hillshade multiplied over it
+in its own pane below the flood overlay, and optionally a labels layer in a pane above the overlay. The flood
+overlay never changes with the basemap.
+
 What does NOT belong here: any backend logic. The frontend only ever calls `backend/api/`'s HTTP/WebSocket
 contract; it never imports Python code or reads `data/` directly.
 

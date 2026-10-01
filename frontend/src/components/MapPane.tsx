@@ -3,9 +3,13 @@ import type { ReactNode } from 'react'
 import L from 'leaflet'
 import type { Bounds, LatLon } from '../types/simulation'
 import { OVERLAY_OPACITY } from '../rendering/depthToImage'
+import { HILLSHADE } from '../geo/basemaps'
+import type { Basemap, TileSpec } from '../geo/basemaps'
 
 interface MapPaneProps {
   bounds: Bounds | null
+  /** The background tiles (base, optional hillshade and labels); switching it swaps them in place. */
+  basemap: Basemap
   /** The flood overlay image; null shows the basemap only. */
   imageUrl: string | null
   /** Engine name drawn over the pane, for the two-pane Compare view. */
@@ -29,6 +33,26 @@ interface MapPaneProps {
 const SEED_PANE = 'seed'
 const SEED_PANE_Z_INDEX = '450'
 
+// Between the basemap (tilePane, z 200) and the flood overlay (overlayPane, z 400): the hillshade multiplies
+// into the base tiles only, never into the depth ramp drawn above it. The floodplain itself is near-flat, so
+// it shades almost white and barely changes there.
+const RELIEF_PANE = 'relief'
+const RELIEF_PANE_Z_INDEX = '250'
+
+// Place names above the flood overlay, so they stay readable through it, and below the seed pane.
+const LABELS_PANE = 'labels'
+const LABELS_PANE_Z_INDEX = '420'
+
+function tileLayer(spec: TileSpec, options: L.TileLayerOptions = {}): L.TileLayer {
+  return L.tileLayer(spec.url, {
+    attribution: spec.attribution,
+    maxZoom: 19,
+    maxNativeZoom: spec.maxNativeZoom,
+    ...(spec.subdomains ? { subdomains: spec.subdomains } : {}),
+    ...options,
+  })
+}
+
 // Lajeado/Estrela, RS - a reasonable default view before a run's real bounds arrive.
 const DEFAULT_CENTER: [number, number] = [-29.48, -51.96]
 const DEFAULT_ZOOM = 13
@@ -37,9 +61,10 @@ function toLatLngBounds(bounds: Bounds): L.LatLngBounds {
   return L.latLngBounds([bounds.south, bounds.west], [bounds.north, bounds.east])
 }
 
-/** One Leaflet map: OSM basemap plus a single flood overlay image stretched over the grid's bounds. */
+/** One Leaflet map: a basemap (often with shaded relief), plus a single flood overlay image stretched over the grid's bounds. */
 export function MapPane({
   bounds,
+  basemap,
   imageUrl,
   label,
   legend,
@@ -52,8 +77,9 @@ export function MapPane({
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<L.Map | null>(null)
   const overlayRef = useRef<L.ImageOverlay | null>(null)
-  const outlineRef = useRef<L.Polygon | null>(null)
+  const outlineRef = useRef<L.LayerGroup | null>(null)
   const markerRef = useRef<L.CircleMarker | null>(null)
+  const basemapLayersRef = useRef<L.TileLayer[]>([])
   const onMapClickRef = useRef(onMapClick)
   useEffect(() => {
     onMapClickRef.current = onMapClick
@@ -70,12 +96,13 @@ export function MapPane({
     if (!container || mapRef.current) return
 
     const map = L.map(container).setView(DEFAULT_CENTER, DEFAULT_ZOOM)
-    // Standard OSM: streets and place names stay readable under the overlay. The depth ramp
-    // (rendering/depthToImage.ts) is designed against its light tiles, including its blue water.
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-      maxZoom: 19,
-    }).addTo(map)
+    const reliefPane = map.createPane(RELIEF_PANE)
+    reliefPane.style.zIndex = RELIEF_PANE_Z_INDEX
+    reliefPane.style.mixBlendMode = 'multiply'
+    reliefPane.style.pointerEvents = 'none'
+    const labelsPane = map.createPane(LABELS_PANE)
+    labelsPane.style.zIndex = LABELS_PANE_Z_INDEX
+    labelsPane.style.pointerEvents = 'none'
     map.createPane(SEED_PANE).style.zIndex = SEED_PANE_Z_INDEX
     map.on('click', (event: L.LeafletMouseEvent) => {
       onMapClickRef.current?.({ lat: event.latlng.lat, lon: event.latlng.lng })
@@ -95,8 +122,20 @@ export function MapPane({
       overlayRef.current = null
       outlineRef.current = null
       markerRef.current = null
+      basemapLayersRef.current = []
     }
   }, [])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    for (const layer of basemapLayersRef.current) layer.remove()
+    const layers = [tileLayer(basemap.base)]
+    if (basemap.relief) layers.push(tileLayer(HILLSHADE, { pane: RELIEF_PANE, opacity: basemap.relief.opacity }))
+    if (basemap.labels) layers.push(tileLayer(basemap.labels, { pane: LABELS_PANE }))
+    for (const layer of layers) layer.addTo(map)
+    basemapLayersRef.current = layers
+  }, [basemap])
 
   // A crosshair says the map takes a click; Leaflet's own grab cursor otherwise.
   useEffect(() => {
@@ -109,14 +148,13 @@ export function MapPane({
     outlineRef.current?.remove()
     outlineRef.current = null
     if (!map || !footprint) return
-    outlineRef.current = L.polygon(footprint.map(([lat, lon]): L.LatLngTuple => [lat, lon]), {
-      pane: SEED_PANE,
-      color: '#111827',
-      weight: 1.5,
-      dashArray: '6 4',
-      fill: false,
-      interactive: false,
-    }).addTo(map)
+    const corners = footprint.map(([lat, lon]): L.LatLngTuple => [lat, lon])
+    const style = { pane: SEED_PANE, fill: false, interactive: false }
+    // A dark dash over a pale halo, so the outline reads on light tiles and satellite imagery alike.
+    outlineRef.current = L.layerGroup([
+      L.polygon(corners, { ...style, color: '#ffffff', weight: 4, opacity: 0.7 }),
+      L.polygon(corners, { ...style, color: '#111827', weight: 1.5, dashArray: '6 4' }),
+    ]).addTo(map)
   }, [footprint])
 
   useEffect(() => {

@@ -7,6 +7,8 @@ import type { CompactFrame, DepthGrid } from '../rendering/depthGrid'
 import type { Engine, ResultLayers } from '../hooks/useSimulationRun'
 import type { Timeline as TimelineState } from '../hooks/useTimeline'
 import { depthToImageDataUrl, extentToImageDataUrl } from '../rendering/depthToImage'
+import { BASEMAPS, DEFAULT_BASEMAP } from '../geo/basemaps'
+import type { BasemapId } from '../geo/basemaps'
 import { DepthLegend } from './DepthLegend'
 import { ExtentLegend } from './ExtentLegend'
 import { MapPane } from './MapPane'
@@ -54,6 +56,19 @@ function resolveView(view: MapView, available: Record<MapView, boolean>): MapVie
   if (view === 'compare') return resolveView('temporal', available)
   const other: Engine = view === 'fast' ? 'temporal' : 'fast'
   return available[other] ? other : null
+}
+
+const BASEMAP_STORAGE_KEY = 'terranova.basemap'
+
+/** The basemap picked last time in this browser, if storage is readable and the choice still exists. */
+function storedBasemap(): BasemapId {
+  try {
+    const stored = localStorage.getItem(BASEMAP_STORAGE_KEY)
+    if (stored && stored in BASEMAPS) return stored as BasemapId
+  } catch {
+    // Storage blocked (private mode, site data off): fall back to the default.
+  }
+  return DEFAULT_BASEMAP
 }
 
 /** "Temporal CA", naming the neighborhood when it isn't the validated Moore one. */
@@ -148,7 +163,16 @@ export function FloodMap({
   onMapClick,
   seedNotice,
 }: FloodMapProps) {
-  const seedProps = { footprint, seedMarker, onMapClick }
+  const [basemapId, setBasemapId] = useState<BasemapId>(storedBasemap)
+  const selectBasemap = (id: BasemapId) => {
+    setBasemapId(id)
+    try {
+      localStorage.setItem(BASEMAP_STORAGE_KEY, id)
+    } catch {
+      // Not remembered across visits, but still applied now.
+    }
+  }
+  const paneProps = { basemap: BASEMAPS[basemapId], footprint, seedMarker, onMapClick }
   // A manual view choice only lasts for the run it was made in; a new run shows the engine just run, or
   // Compare for the May 2024 replay.
   const [choice, setChoice] = useState<{ view: MapView; runCount: number } | null>(null)
@@ -169,14 +193,14 @@ export function FloodMap({
   return (
     <div className="relative flex h-full w-full flex-col">
       {/* The primary pane stays mounted across view changes; Compare adds the fast pane beside it. */}
-      <div className={`grid min-h-0 w-full flex-1 ${compare ? 'grid-cols-2 gap-0.5 bg-basalt-line' : 'grid-cols-1'}`}>
+      <div className={`relative grid min-h-0 w-full flex-1 ${compare ? 'grid-cols-2 gap-0.5 bg-basalt-line' : 'grid-cols-1'}`}>
         <MapPane
           bounds={bounds}
           imageUrl={primary === 'fast' ? fastUrl : temporalUrl}
           label={compare ? paneLabel('temporal', timeline.frame, layers.temporal?.neighborhood) : undefined}
           legend={shown ? LEGEND[primary] : undefined}
           onMapReady={onPrimaryReady}
-          {...seedProps}
+          {...paneProps}
         />
         {compare && (
           <MapPane
@@ -186,9 +210,29 @@ export function FloodMap({
             legend={LEGEND.fast}
             fitOnMount={false}
             onMapReady={onSecondaryReady}
-            {...seedProps}
+            {...paneProps}
           />
         )}
+        <div
+          role="radiogroup"
+          aria-label="Basemap"
+          className="absolute right-3 bottom-7 z-1000 flex gap-0.5 rounded-md bg-basalt/95 p-0.5 text-xs shadow-lg backdrop-blur-sm"
+        >
+          {Object.values(BASEMAPS).map(({ id, label }) => (
+            <button
+              key={id}
+              type="button"
+              role="radio"
+              aria-checked={basemapId === id}
+              onClick={() => selectBasemap(id)}
+              className={`rounded px-2 py-1 font-medium transition-colors ${
+                basemapId === id ? 'bg-mist text-basalt' : 'text-mist hover:bg-basalt-raised'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* The timeline sits under the temporal pane only: the fast mode has a single frame to show. */}
