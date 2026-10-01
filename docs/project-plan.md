@@ -1450,3 +1450,25 @@ they'd cost and whether they touch the TCC's documented model:
   (already engine-side, being wired end-to-end in step 9) as the real event's driving input instead.
 - **Boundary inflow itself exists in the engine (`step()`'s `inflow` parameter) but is not reachable
   through the API or frontend yet — that end-to-end wiring is step 9 above, not a "future feature."**
+
+**Demo / frontend ideas (raised after the "Basalt & gauge" visual polish and the basemap picker):**
+Independent, unordered candidates for making the app explain the model and its validation to a TCC panel.
+None touch the documented engine; the ones needing data the frontend doesn't have yet say so.
+- **Observed May 2024 extent on the map**: serve the SGB/CPRM reference extent (and the Estrela coverage-gap exclusion,
+  `docs/tcc-deviations.md` §16.2) through the API, draw simulated vs. observed agreement on the map, and show
+  gap-corrected CSI / hit rate / false-alarm rate live in the Results tab.
+- **Model inputs as map layers**: a hillshade rendered from the project's own processed DEM (the exact terrain
+  the CA sees, rather than Esri's), and a Manning roughness / land-cover layer. Needs small backend endpoints.
+- **Click-a-cell inspector**: depth, elevation `Z`, Manning `n` and first-wet time for the clicked cell, from
+  the frame buffer plus the grid's static rasters.
+- **Arrival-time map**: color each cell by the hour it first flooded, computed client-side from the temporal
+  frame buffer (a standard flood-risk product).
+- **Maximum-depth envelope**: deepest water each cell reached during the run, also from the frame buffer.
+- **Gauge hydrograph chart** in Results: the real May 2024 discharge record with a marker at the timeline's
+  current `t`. Needs the hydrograph exposed through the API.
+- **Overlay opacity slider** and **smoother frame-to-frame transitions** (the latter already listed above).
+- **Timeline playback speed** (1x/4x/16x) — full 90 m replays take several minutes.
+- **Export**: the map as PNG for the thesis document, the flooded extent as GeoJSON.
+- **Narrow-screen Compare fix**: below ~900 px the map-view switcher covers the right pane's label.
+- **Playwright smoke tests** (`npm run test:e2e`) for Setup, Replay, Stop, seeding and the basemap picker —
+  the frontend has no tests yet.
