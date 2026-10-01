@@ -5,10 +5,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api import state
-from api.routers import health, simulations
+from api.routers import health, simulations, validation
 from config import settings
 from config.settings import CORS_ALLOWED_ORIGINS, HYDROGRAPH_INFLOW_EDGE, HYDROGRAPH_OUTLET_EDGE
 from ingestion.dem import build_elevation_matrix, get_geographic_bounds, get_georeference
+from ingestion.flood_extent import build_validation_reference
 from ingestion.hydrograph import build_hydrograph, find_boundary_inflow_mask, find_boundary_outlet
 from ingestion.landcover import build_roughness_matrix
 
@@ -72,6 +73,19 @@ async def lifespan(app: FastAPI):
             "Gauge-driven and fast runs will be rejected with a 503; seeded-pool runs are unaffected. "
             "Re-run scripts/download_hydrograph.py and restart to fix."
         )
+    # Best-effort for the same reason: scoring against the observed extent is
+    # additive, and a missing stage layer must not stop the app from starting.
+    resolution = int(settings.VALIDATION_RESOLUTION_METERS)
+    try:
+        observed, excluded = build_validation_reference(state.GRIDS[resolution].Z)
+        stage_m = settings.FLOOD_EXTENT_STAGE_LAYERS[settings.FLOOD_EXTENT_LAYER_ID][0]
+        state.VALIDATION_REFERENCE = state.ValidationReference(resolution, stage_m, observed, excluded)
+    except Exception as exc:
+        state.VALIDATION_REFERENCE = None
+        print(
+            f"WARNING: could not load the observed May 2024 flood extent ({type(exc).__name__}: {exc}). "
+            "GET /validation/may2024 will answer 503. Re-run scripts/download_flood_extent.py and restart to fix."
+        )
     yield
 
 
@@ -84,3 +98,4 @@ app.add_middleware(
 )
 app.include_router(health.router)
 app.include_router(simulations.router)
+app.include_router(validation.router)

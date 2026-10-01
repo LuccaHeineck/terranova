@@ -21,6 +21,12 @@ for any of it.
 missing or unparseable the lifespan leaves it `None` rather than failing
 startup, and `simulations.py` turns a gauge-driven or fast request into a 503
 while seeded-pool runs keep working.
+
+`VALIDATION_REFERENCE` is the observed May 2024 extent and the Estrela
+coverage-gap exclusion on the 90m validation grid (docs/tcc-deviations.md
+section 16.2), so a client can score and draw a run against it. Also
+best-effort: without the raw SGB stage layers it stays `None` and
+`GET /validation/may2024` answers 503.
 """
 
 from dataclasses import dataclass
@@ -48,8 +54,17 @@ class Grid:
     boundary_roughness: np.ndarray | None
 
 
+@dataclass
+class ValidationReference:
+    resolution: int  # the served grid it is aligned to, m
+    stage_m: float  # the reference layer's river stage
+    observed: np.ndarray  # bool: flooded in the SGB/CPRM reference at the peak
+    excluded: np.ndarray  # bool: left out of scoring by the coverage-gap correction
+
+
 GRIDS: dict[int, Grid] = {}
 HYDROGRAPH: Hydrograph | None = None
+VALIDATION_REFERENCE: ValidationReference | None = None
 
 
 def get_grids() -> dict[int, Grid]:
@@ -58,3 +73,7 @@ def get_grids() -> dict[int, Grid]:
 
 def get_hydrograph() -> Hydrograph | None:
     return HYDROGRAPH
+
+
+def get_validation_reference() -> ValidationReference | None:
+    return VALIDATION_REFERENCE

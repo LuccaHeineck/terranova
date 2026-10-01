@@ -9,7 +9,8 @@ from starlette.websockets import WebSocketDisconnect
 
 from api.main import app
 from api.routers.simulations import get_grids, get_hydrograph
-from api.state import Grid
+from api.routers.validation import get_validation_reference
+from api.state import Grid, ValidationReference
 from ingestion.hydrograph import Hydrograph
 from simulation.engine import seed_pool_at_lowest_point, step
 
@@ -509,3 +510,32 @@ def test_von_neumann_rejects_an_outflow_fraction_above_its_verified_range():
     # Moore is not restricted.
     moore = {"steps": 3, "frame_interval": 1, "outflow_fraction": 0.5}
     assert client.post("/simulations", json=moore).status_code == 200
+
+
+def test_observed_may2024_serves_row_major_cell_indices():
+    observed = np.array([[True, False, False], [False, True, True]])
+    excluded = np.array([[False, False, True], [False, False, False]])
+    app.dependency_overrides[get_validation_reference] = lambda: ValidationReference(90, 33.67, observed, excluded)
+    try:
+        response = client.get("/validation/may2024")
+    finally:
+        del app.dependency_overrides[get_validation_reference]
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "resolution": 90,
+        "grid_shape": [2, 3],
+        "stage_m": 33.67,
+        "observed_cells": [0, 4, 5],
+        "excluded_cells": [2],
+    }
+
+
+def test_observed_may2024_is_503_when_not_loaded():
+    app.dependency_overrides[get_validation_reference] = lambda: None
+    try:
+        response = client.get("/validation/may2024")
+    finally:
+        del app.dependency_overrides[get_validation_reference]
+
+    assert response.status_code == 503

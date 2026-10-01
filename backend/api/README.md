@@ -14,6 +14,7 @@ api/
   routers/
     health.py         # GET /health -> {"status": "ok"}
     simulations.py     # POST /simulations, WS /simulations/{run_id}/stream
+    validation.py      # GET /validation/may2024 -> observed May 2024 extent + coverage-gap cells (90m)
 ```
 
 ## Run locally

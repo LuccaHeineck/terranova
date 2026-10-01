@@ -122,7 +122,12 @@ validation grid, chosen per run with `resolution`) plus the best-effort hydrogra
 startup via a `lifespan`, not per-request, and exposed as FastAPI dependencies (`get_grids`,
 `get_hydrograph`) rather than read directly off `app.state` so tests can swap in small synthetic arrays via
 `app.dependency_overrides`. Serves the real Lajeado/Estrela grid only — no synthetic-grid option, since
-`api/` may never import `examples/`.
+`api/` may never import `examples/`. `GET /validation/may2024` (`routers/validation.py`) serves the observed
+SGB/CPRM May 2024 peak extent and the Estrela coverage-gap exclusion (`docs/tcc-deviations.md` §16.2) on the
+90m validation grid, as row-major cell indices; both are built offline at startup by
+`ingestion.flood_extent.build_validation_reference` from the raw stage layers
+`scripts/download_flood_extent.py` saves, best-effort like the hydrograph (missing files -> 503). The
+frontend scores frames against it itself, so the numbers follow the timeline without a request per frame.
 
 What does NOT belong here: any CA math (delegates to `simulation/`), any raster parsing (delegates to
 `ingestion/`).
