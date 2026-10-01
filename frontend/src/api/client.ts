@@ -1,5 +1,5 @@
 import { API_BASE_URL } from './config'
-import type { GridInfo, SimulationCreated, SimulationParams } from '../types/simulation'
+import type { GridInfo, ObservedExtent, SimulationCreated, SimulationParams } from '../types/simulation'
 
 export async function createSimulation(params: SimulationParams): Promise<SimulationCreated> {
   const response = await fetch(`${API_BASE_URL}/simulations`, {
@@ -19,5 +19,21 @@ export async function createSimulation(params: SimulationParams): Promise<Simula
 export async function fetchGrids(): Promise<GridInfo[]> {
   const response = await fetch(`${API_BASE_URL}/grids`)
   if (!response.ok) throw new Error(`GET /grids failed (${response.status})`)
+  return response.json()
+}
+
+/** Thrown for an HTTP error answer, as opposed to the API being unreachable. */
+export class HttpError extends Error {
+  readonly status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.status = status
+  }
+}
+
+export async function fetchObservedExtent(): Promise<ObservedExtent> {
+  const response = await fetch(`${API_BASE_URL}/validation/may2024`)
+  if (!response.ok) throw new HttpError(`GET /validation/may2024 failed (${response.status})`, response.status)
   return response.json()
 }

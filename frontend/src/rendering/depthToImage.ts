@@ -120,7 +120,8 @@ export interface ExtentAgreement {
   fastOnly: number
 }
 
-function isWet(d: number): boolean {
+/** Whether a depth counts as flooded: above FLOODED_DEPTH_THRESHOLD_M, the same cutoff the backend scores with. */
+export function isWet(d: number): boolean {
   return d > FLOODED_DEPTH_THRESHOLD_M
 }
 

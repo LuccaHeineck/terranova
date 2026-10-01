@@ -7,8 +7,11 @@ import type { CompactFrame, DepthGrid } from '../rendering/depthGrid'
 import type { Engine, ResultLayers } from '../hooks/useSimulationRun'
 import type { Timeline as TimelineState } from '../hooks/useTimeline'
 import { depthToImageDataUrl, extentToImageDataUrl } from '../rendering/depthToImage'
+import { agreementToImageDataUrl, observedToImageDataUrl } from '../rendering/observed'
+import type { ObservedMasks } from '../rendering/observed'
 import { BASEMAPS, DEFAULT_BASEMAP } from '../geo/basemaps'
 import type { BasemapId } from '../geo/basemaps'
+import { AgreementLegend } from './AgreementLegend'
 import { DepthLegend } from './DepthLegend'
 import { ExtentLegend } from './ExtentLegend'
 import { MapPane } from './MapPane'
@@ -31,6 +34,8 @@ interface FloodMapProps {
   onMapClick: ((point: LatLon) => void) | null
   /** Why the last click placed nothing (outside the grid). */
   seedNotice: string | null
+  /** The observed May 2024 extent, when it is on the grid the map shows (null otherwise: no toggle). */
+  observed: ObservedMasks | null
 }
 
 const VIEW_LABEL: Record<MapView, string> = {
@@ -94,9 +99,20 @@ const LEGEND: Record<Engine, ReactNode> = {
   fast: <ExtentLegend />,
 }
 
-/** Rasterized overlay for one engine's shown frame, recomputed only when that frame changes. */
-function useOverlayUrl(engine: Engine, frame: CompactFrame | null, needed: boolean): string | null {
-  return useMemo(() => (needed && frame ? RENDER[engine](frame.depth) : null), [engine, needed, frame])
+/**
+ * Rasterized overlay for one engine's shown frame, recomputed only when that frame changes. Against the observed
+ * extent, when given, it is drawn as agreement (hit / missed / false alarm) instead of depth or extent.
+ */
+function useOverlayUrl(
+  engine: Engine,
+  frame: CompactFrame | null,
+  needed: boolean,
+  observed: ObservedMasks | null,
+): string | null {
+  return useMemo(() => {
+    if (!needed || !frame) return null
+    return (observed && agreementToImageDataUrl(frame.depth, observed)) ?? RENDER[engine](frame.depth)
+  }, [engine, needed, frame, observed])
 }
 
 /**
@@ -162,6 +178,7 @@ export function FloodMap({
   seedMarker,
   onMapClick,
   seedNotice,
+  observed,
 }: FloodMapProps) {
   const [basemapId, setBasemapId] = useState<BasemapId>(storedBasemap)
   const selectBasemap = (id: BasemapId) => {
@@ -182,12 +199,21 @@ export function FloodMap({
   const shown = resolveView(view, available)
   const compare = shown === 'compare'
 
+  // Drawing against the observed extent is a toggle that holds across runs; it only applies while the map's
+  // grid is the one the observation is on.
+  const [observedOn, setObservedOn] = useState(false)
+  const against = observedOn ? observed : null
+
   const showsTemporal = shown === 'temporal' || compare
   // The temporal pane draws the timeline's selected frame (the newest one while following live).
-  const temporalUrl = useOverlayUrl('temporal', timeline.frame, showsTemporal)
-  const fastUrl = useOverlayUrl('fast', layers.fast?.frame ?? null, shown === 'fast' || compare)
+  const temporalUrl = useOverlayUrl('temporal', timeline.frame, showsTemporal, against)
+  const fastUrl = useOverlayUrl('fast', layers.fast?.frame ?? null, shown === 'fast' || compare, against)
+  // With nothing simulated to draw yet, the toggle shows the observed extent on its own.
+  const observedUrl = useMemo(() => (against && !shown ? observedToImageDataUrl(against) : null), [against, shown])
   // The primary pane shows the temporal result, or the fast one when that's the only view.
   const primary: Engine = shown === 'fast' ? 'fast' : 'temporal'
+  const legendFor = (engine: Engine) =>
+    against ? <AgreementLegend mode="agreement" stageM={against.stageM} /> : LEGEND[engine]
   const { onPrimaryReady, onSecondaryReady } = useSyncedMaps(bounds)
 
   return (
@@ -196,9 +222,11 @@ export function FloodMap({
       <div className={`relative grid min-h-0 w-full flex-1 ${compare ? 'grid-cols-2 gap-0.5 bg-basalt-line' : 'grid-cols-1'}`}>
         <MapPane
           bounds={bounds}
-          imageUrl={primary === 'fast' ? fastUrl : temporalUrl}
+          imageUrl={observedUrl ?? (primary === 'fast' ? fastUrl : temporalUrl)}
           label={compare ? paneLabel('temporal', timeline.frame, layers.temporal?.neighborhood) : undefined}
-          legend={shown ? LEGEND[primary] : undefined}
+          legend={
+            shown ? legendFor(primary) : against ? <AgreementLegend mode="observed" stageM={against.stageM} /> : undefined
+          }
           onMapReady={onPrimaryReady}
           {...paneProps}
         />
@@ -207,7 +235,7 @@ export function FloodMap({
             bounds={bounds}
             imageUrl={fastUrl}
             label={paneLabel('fast', layers.fast?.frame ?? null)}
-            legend={LEGEND.fast}
+            legend={legendFor('fast')}
             fitOnMount={false}
             onMapReady={onSecondaryReady}
             {...paneProps}
@@ -256,11 +284,12 @@ export function FloodMap({
         </div>
       )}
 
-      {(available.temporal || available.fast) && (
+      {(available.temporal || available.fast || observed) && (
         <div className="absolute top-3 right-3 z-1000 flex flex-col items-end gap-1.5 text-xs">
           <div className="flex items-center gap-0.5 rounded-md bg-basalt/95 p-0.5 shadow-lg backdrop-blur-sm">
-            <div className="flex gap-0.5" role="group" aria-label="Map view">
-              {(Object.keys(VIEW_LABEL) as MapView[]).map((v) => (
+            {(available.temporal || available.fast) && (
+              <div className="flex gap-0.5" role="group" aria-label="Map view">
+                {(Object.keys(VIEW_LABEL) as MapView[]).map((v) => (
               <button
                 key={v}
                 type="button"
@@ -274,18 +303,48 @@ export function FloodMap({
                 {VIEW_LABEL[v]}
               </button>
             ))}
-            </div>
+              </div>
+            )}
+            {observed && (
+              <>
+                {(available.temporal || available.fast) && (
+                  <span aria-hidden="true" className="mx-0.5 h-5 w-px bg-basalt-line" />
+                )}
+                <button
+                  type="button"
+                  onClick={() => setObservedOn((on) => !on)}
+                  aria-pressed={observedOn}
+                  title="Draw the run against the observed May 2024 flood extent"
+                  className={`flex items-center gap-1.5 rounded px-2.5 py-1 text-[13px] font-medium transition-colors ${
+                    observedOn ? 'bg-mist text-basalt' : 'text-mist hover:bg-basalt-raised'
+                  }`}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={`h-2.5 w-2.5 rounded-sm border ${observedOn ? 'border-basalt bg-basalt' : 'border-mist-muted'}`}
+                  />
+                  Observed
+                </button>
+              </>
+            )}
           </div>
-          {shown && !compare && (
+          {against ? (
             <div className="rounded bg-basalt/85 px-2 py-0.5 text-mist-muted shadow-lg">
-              {shown === 'fast'
-                ? 'Fast mode: steady peak extent'
-                : layers.temporal?.neighborhood === 'von_neumann'
-                  ? 'Temporal CA depth, von Neumann (not validated)'
-                  : 'Temporal CA depth'}
+              {shown ? 'Simulated vs. observed May 2024 extent' : 'Observed May 2024 extent'}
             </div>
+          ) : (
+            shown &&
+            !compare && (
+              <div className="rounded bg-basalt/85 px-2 py-0.5 text-mist-muted shadow-lg">
+                {shown === 'fast'
+                  ? 'Fast mode: steady peak extent'
+                  : layers.temporal?.neighborhood === 'von_neumann'
+                    ? 'Temporal CA depth, von Neumann (not validated)'
+                    : 'Temporal CA depth'}
+              </div>
+            )
           )}
-          {compare && (
+          {compare && !against && (
             <div className="rounded bg-basalt/85 px-2 py-0.5 text-mist-muted shadow-lg">Pan or zoom either map; both follow.</div>
           )}
         </div>

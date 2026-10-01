@@ -1258,6 +1258,30 @@ changes.
 - **Grid outline**: the dashed outline of the simulated grid is now always drawn, not only while placing a
   seed.
 
+**Observed May 2024 extent in the app.** The SGB/CPRM reference extent and its Estrela coverage-gap
+correction (`docs/tcc-deviations.md` §16.2) are now served by the API and drawn and scored live in the
+frontend, so the validation is visible in the demo rather than only in `examples/` output.
+- **Offline gap correction**: `scripts/download_flood_extent.py` now also saves the 19.00m and 26.00m stage
+  layers (`settings.FLOOD_EXTENT_STAGE_LAYERS`). `ingestion.flood_extent.build_validation_reference` rebuilds
+  the observed mask and the excluded cells from those files with no network access, via new pure functions
+  (`dem_channel_col`, `classify_far_bank`, `coverage_gap_mask`). Verified bit-identical to
+  `examples/rescore_stage_invariant.py`'s live-queried `valid_estrela_gap_only`: 2,280 excluded cells, and
+  831 observed cells equal to `build_observed_flood_mask`. The research scripts are untouched.
+- **API**: `GET /validation/may2024` returns the 90m grid's shape, the stage and both masks as row-major cell
+  indices (~15 KB). Loaded at startup, best-effort like the hydrograph; missing files answer 503.
+- **Frontend**: an "Observed" map toggle draws each pane as hit / missed / false alarm (the thesis
+  confusion-map colors), plus "not scored" where a run floods a coverage-gap cell. Before any run it shows the
+  observed extent alone. It is only offered while the map's grid is the 90m one. The Results tab scores every
+  real-event run live (gauge-driven or fast, never a seeded pool) in `frontend/src/rendering/observed.ts`, a
+  mirror of `validation/metrics.py`'s confusion counts with the same 0.01 m cutoff.
+- **Checked end to end** through the "Replay May 2024 flood" preset in a browser:
+  - **Fast:** gap-corrected CSI 0.53, hit rate 0.88, 547 false alarms. This is exactly the documented result.
+  - **Temporal CA at the peak** (t = 133.5 h, step 134,639): CSI 0.8986 (789 hits / 42 missed / 47 false
+    alarms), hit rate 0.95, naive CSI 0.40. This is the 0.8986-vs-0.8997 ulp-noise pair recorded above.
+  - **Wall-clock:** the API run took 23.6 min, against 7.6 min for the bare script.
+- **Tests**: `test_flood_extent.py` covers the three pure functions and the offline builder on synthetic
+  grids; `test_api.py` covers the endpoint and its 503. Suite: 167/167 passing.
+
 To run the CA-engine PoC directly (bare-metal, unrelated to Docker): `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 
 To run the real end-to-end CSI validation against the May 2024 event (bare-metal, expect ~30 minutes):
@@ -1454,7 +1478,8 @@ they'd cost and whether they touch the TCC's documented model:
 **Demo / frontend ideas (raised after the "Basalt & gauge" visual polish and the basemap picker):**
 Independent, unordered candidates for making the app explain the model and its validation to a TCC panel.
 None touch the documented engine; the ones needing data the frontend doesn't have yet say so.
-- **Observed May 2024 extent on the map**: serve the SGB/CPRM reference extent (and the Estrela coverage-gap exclusion,
+- ~~**Observed May 2024 extent on the map**~~ *(done — see "Observed May 2024 extent in the app" in
+  Current status)*: serve the SGB/CPRM reference extent (and the Estrela coverage-gap exclusion,
   `docs/tcc-deviations.md` §16.2) through the API, draw simulated vs. observed agreement on the map, and show
   gap-corrected CSI / hit rate / false-alarm rate live in the Results tab.
 - **Model inputs as map layers**: a hillshade rendered from the project's own processed DEM (the exact terrain

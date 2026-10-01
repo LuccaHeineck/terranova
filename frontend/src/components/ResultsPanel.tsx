@@ -12,6 +12,8 @@ import {
   FLOODED_DEPTH_THRESHOLD_M,
 } from '../rendering/depthToImage'
 import type { ExtentAgreement } from '../rendering/depthToImage'
+import { scoreAgainstObserved } from '../rendering/observed'
+import type { ObservedMasks } from '../rendering/observed'
 import { Callout } from './ui/Callout'
 import { Section } from './ui/Section'
 
@@ -25,6 +27,8 @@ interface ResultsPanelProps {
   /** Whether that is the newest frame (following live / latest) rather than one scrubbed back to. */
   followingLatest: boolean
   error: string | null
+  /** The observed May 2024 extent, if the API serves it; scored only against runs on its grid. */
+  observed: ObservedMasks | null
   onGoToSetup: () => void
 }
 
@@ -89,6 +93,95 @@ function AgreementBar({ agreement }: { agreement: ExtentAgreement }) {
         ))}
       </dl>
     </div>
+  )
+}
+
+function metric(value: number | null): string {
+  return value === null ? 'n/a' : value.toFixed(2)
+}
+
+interface ScoredRun {
+  key: string
+  name: string
+  /** When in the event the scored frame is. */
+  when: string
+  frame: CompactFrame
+}
+
+/** One run's frame scored against the observed extent: gap-corrected CSI first, then its parts. */
+function ScoreCard({ run, observed }: { run: ScoredRun; observed: ObservedMasks }) {
+  const agreement = useMemo(() => scoreAgainstObserved(run.frame.depth, observed), [run.frame, observed])
+  if (!agreement) return null
+  const { corrected, naive } = agreement
+  return (
+    <div className="flex flex-col gap-1 rounded bg-basalt-raised px-2.5 py-2 text-xs">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="font-display text-sm font-semibold text-mist">{run.name}</span>
+        <span className="text-mist-muted">{run.when}</span>
+      </div>
+      <div className="flex items-baseline gap-2">
+        <span className="font-display text-2xl leading-none font-semibold text-mist tabular-nums">
+          {metric(corrected.csi)}
+        </span>
+        <span className="text-mist-muted">CSI, gap-corrected</span>
+      </div>
+      <dl className="mt-0.5 flex flex-col gap-0.5">
+        <Row label="Hit rate">{metric(corrected.hitRate)}</Row>
+        <Row label="False alarm rate">{metric(corrected.falseAlarmRate)}</Row>
+        <Row label="Hit / missed / false alarm">
+          {count(corrected.tp)} / {count(corrected.fn)} / {count(corrected.fp)}
+        </Row>
+        <Row label="Naive CSI (whole grid)">{metric(naive.csi)}</Row>
+      </dl>
+    </div>
+  )
+}
+
+interface ObservedScoresProps {
+  temporal: ResultLayer | null
+  fast: ResultLayer | null
+  temporalFrame: CompactFrame | null
+  observed: ObservedMasks
+}
+
+/**
+ * The runs on the map scored against the observed May 2024 extent, live: the temporal one at the frame the
+ * timeline has selected. Only real-event runs are scored (a synthetic seeded pool has nothing to match), and
+ * only on the grid the observation is on.
+ */
+function ObservedScores({ temporal, fast, temporalFrame, observed }: ObservedScoresProps) {
+  const runs: ScoredRun[] = []
+  const scorable = (layer: ResultLayer | null) => layer && layer.mode !== 'seeded_pool'
+  if (scorable(temporal) && temporalFrame) {
+    runs.push({
+      key: 'temporal',
+      name: 'Temporal CA',
+      when: `t = ${((temporalFrame.elapsed_time ?? 0) / 3600).toFixed(1)} h`,
+      frame: temporalFrame,
+    })
+  }
+  if (scorable(fast) && fast!.frame) runs.push({ key: 'fast', name: 'Fast', when: 'at the peak', frame: fast!.frame })
+
+  const resolutions = [temporal, fast].filter(scorable).map((layer) => layer!.resolution)
+  if (runs.length === 0 && resolutions.length === 0) return null
+  const onGrid = resolutions.every((r) => r === observed.resolution)
+
+  return (
+    <Section title="Against the observed flood">
+      <p className="-mt-1 text-xs leading-snug text-mist-muted">
+        SGB/CPRM extent at the {observed.stageM.toFixed(2)} m peak stage. Gap-corrected scores leave out the{' '}
+        {count(observed.excludedCount)} Estrela-side cells the reference never modeled. Documented: the temporal CA
+        scores CSI 0.90 at the peak.
+      </p>
+      {onGrid ? (
+        runs.map((run) => <ScoreCard key={run.key} run={run} observed={observed} />)
+      ) : (
+        <Callout tone="info">
+          The observed extent is scored on the {observed.resolution} m validation grid only; this run used the{' '}
+          {resolutions.find((r) => r !== observed.resolution)} m grid.
+        </Callout>
+      )}
+    </Section>
   )
 }
 
@@ -167,6 +260,7 @@ export function ResultsPanel({
   temporalFrame,
   followingLatest,
   error,
+  observed,
   onGoToSetup,
 }: ResultsPanelProps) {
   const { temporal, fast } = layers
@@ -218,6 +312,8 @@ export function ResultsPanel({
           </dl>
         </Section>
       )}
+
+      {observed && <ObservedScores temporal={temporal} fast={fast} temporalFrame={temporalFrame} observed={observed} />}
 
       {temporal && temporalFrame && fast?.frame && (
         <Comparison temporal={temporal} fast={fast} temporalFrame={temporalFrame} followingLatest={followingLatest} />

@@ -96,3 +96,15 @@ export type StreamMessage = SimulationFrame | SimulationDone
 export function isDone(message: StreamMessage): message is SimulationDone {
   return (message as SimulationDone).done === true
 }
+
+/** GET /validation/may2024: the observed May 2024 extent on the grid it is scored on. */
+export interface ObservedExtent {
+  resolution: Resolution
+  grid_shape: [number, number]
+  /** River stage of the SGB/CPRM reference layer (the May 2024 peak), m. */
+  stage_m: number
+  /** Row-major flat indices of the cells flooded in the reference. */
+  observed_cells: number[]
+  /** Row-major flat indices left out of scoring by the Estrela coverage-gap correction. */
+  excluded_cells: number[]
+}

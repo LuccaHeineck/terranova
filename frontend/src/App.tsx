@@ -4,6 +4,7 @@ import { useSimulationRun } from './hooks/useSimulationRun'
 import { useTimeline } from './hooks/useTimeline'
 import { useGrids } from './hooks/useGrids'
 import { useRunSetup } from './hooks/useRunSetup'
+import { useObservedExtent } from './hooks/useObservedExtent'
 import { ConfigPanel } from './components/ConfigPanel'
 import { FloodMap } from './components/FloodMap'
 import { LogPanel } from './components/LogPanel'
@@ -30,6 +31,11 @@ export default function App() {
   // placed in, else the grid of the result on the map, else the selected one.
   const outlineGrid = onMapClick ? grid : ((shownLayer && grids?.[shownLayer.resolution]) ?? grid)
   const footprint = outlineGrid?.footprint ?? null
+  const observed = useObservedExtent()
+  // The map offers the observed extent only on the grid it is scored on: the result's grid, or before any run
+  // the selected one.
+  const mapResolution = shownLayer?.resolution ?? setup.resolution
+  const observedOnMap = observed && observed.resolution === mapResolution ? observed : null
 
   const [tab, setTab] = useState<SidebarTab>('setup')
   const [panelOpen, setPanelOpen] = useState(true)
@@ -81,6 +87,7 @@ export default function App() {
                 temporalFrame={timeline.frame}
                 followingLatest={timeline.following}
                 error={run.error}
+                observed={observed}
                 onGoToSetup={() => setTab('setup')}
               />
             ),
@@ -100,6 +107,7 @@ export default function App() {
             seedMarker={setup.seeding ? setup.seed : null}
             onMapClick={onMapClick}
             seedNotice={setup.seeding ? setup.seedNotice : null}
+            observed={observedOnMap}
           />
         </main>
       </div>

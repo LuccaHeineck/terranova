@@ -232,8 +232,14 @@ per browser in `localStorage`): each basemap is a base tile layer, optionally Es
 in its own pane below the flood overlay, and optionally a labels layer in a pane above the overlay. The flood
 overlay never changes with the basemap.
 
-The simulated grid's dashed outline is always drawn, to show how far the simulation reaches: the selected grid
-while a seed is being placed, otherwise the grid of the result on the map.
+An "Observed" toggle on the map (shown only while the map's grid is the 90m one the observation is on) draws
+each pane against the observed May 2024 extent instead of depth: hit / missed / false alarm, plus "not
+scored" where the simulation floods a coverage-gap cell, in the colors of the thesis' confusion-map figures
+(`examples/plot_confusion_map.py`). Before any run it shows the observed extent alone. The Results tab scores
+each real-event run (gauge-driven or fast; never a synthetic seeded pool) live: gap-corrected CSI, hit rate,
+false-alarm rate and naive CSI, from `rendering/observed.ts`, a client-side mirror of
+`validation/metrics.py`'s confusion counts with the same 0.01 m wet-cell cutoff. The simulated grid's dashed outline is always drawn, to show how far the
+simulation reaches: the selected grid while a seed is being placed, otherwise the grid of the result on the map.
 
 What does NOT belong here: any backend logic. The frontend only ever calls `backend/api/`'s HTTP/WebSocket
 contract; it never imports Python code or reads `data/` directly.
