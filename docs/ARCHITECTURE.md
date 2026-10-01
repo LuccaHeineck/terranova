@@ -227,6 +227,9 @@ per browser in `localStorage`): each basemap is a base tile layer, optionally Es
 in its own pane below the flood overlay, and optionally a labels layer in a pane above the overlay. The flood
 overlay never changes with the basemap.
 
+The simulated grid's dashed outline is always drawn, to show how far the simulation reaches: the selected grid
+while a seed is being placed, otherwise the grid of the result on the map.
+
 What does NOT belong here: any backend logic. The frontend only ever calls `backend/api/`'s HTTP/WebSocket
 contract; it never imports Python code or reads `data/` directly.
 

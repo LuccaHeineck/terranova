@@ -1244,7 +1244,8 @@ cells than 30m.
 - **Tests**: `test_api.py` has a 60m test grid. The "unserved resolution" case now uses 45, since 60 used to be
   that example.
 
-**Frontend redesign ("Basalt & gauge") and basemap picker.** UI-only; no API or engine changes.
+**Frontend redesign ("Basalt & gauge"), basemap picker, always-on grid outline.** UI-only; no API or engine
+changes.
 - **Layout**: a top bar (status, grid size, the one Start/Stop button) over a left menu (Setup / Results / Log)
   and a full-width map. Every tab panel stays mounted, so the setup form keeps its values across tabs.
 - **Setup**: option cards, segmented controls instead of the grid dropdown, log-scale sliders for seed volume
@@ -1254,6 +1255,8 @@ cells than 30m.
   the default), Topographic (OpenTopoMap), Streets (the previous OSM + hillshade), Satellite. Remembered per
   browser. CARTO's tiles were tried first and now require an API key; a CSS contrast boost on the hillshade
   was tried and washes it out.
+- **Grid outline**: the dashed outline of the simulated grid is now always drawn, not only while placing a
+  seed.
 
 To run the CA-engine PoC directly (bare-metal, unrelated to Docker): `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 

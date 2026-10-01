@@ -20,7 +20,7 @@ interface MapPaneProps {
   fitOnMount?: boolean
   /** Called with the Leaflet map once created, and with null just before it is removed. */
   onMapReady?: (map: L.Map | null) => void
-  /** A grid's true outline ([lat, lon] corners), drawn dashed while a seed can be placed; null hides it. */
+  /** A grid's true outline ([lat, lon] corners), drawn dashed to show the simulated area; null hides it. */
   footprint?: readonly [number, number][] | null
   /** The seed marker; null draws none. */
   seedMarker?: LatLon | null

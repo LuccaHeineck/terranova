@@ -19,12 +19,17 @@ export default function App() {
   const setup = useRunSetup()
   const { grids, error: gridsError } = useGrids()
   const grid = grids?.[setup.resolution] ?? null
-  // The seed marker and the outline it must fall in only exist for a seeded-pool setup; clicks place it
-  // only while no run is going, like every other form field.
-  const footprint = setup.seeding && grid ? grid.footprint : null
+  // The seed marker only exists for a seeded-pool setup; clicks place it inside the selected grid's outline,
+  // and only while no run is going, like every other form field.
+  const seedFootprint = setup.seeding && grid ? grid.footprint : null
   const { placeSeed } = setup
-  const onMapClick = footprint && !busy ? (point: { lat: number; lon: number }) => placeSeed(point, footprint) : null
+  const onMapClick =
+    seedFootprint && !busy ? (point: { lat: number; lon: number }) => placeSeed(point, seedFootprint) : null
   const shownLayer = run.layers[run.activeEngine] ?? run.layers.temporal ?? run.layers.fast
+  // The dashed outline is always drawn, to show how far the simulation reaches: the grid a seed is being
+  // placed in, else the grid of the result on the map, else the selected one.
+  const outlineGrid = onMapClick ? grid : ((shownLayer && grids?.[shownLayer.resolution]) ?? grid)
+  const footprint = outlineGrid?.footprint ?? null
 
   const [tab, setTab] = useState<SidebarTab>('setup')
   const [panelOpen, setPanelOpen] = useState(true)

@@ -24,7 +24,7 @@ interface FloodMapProps {
   replayActive: boolean
   /** Which temporal frame is shown: the timeline drives the temporal pane (never the fast one). */
   timeline: TimelineState
-  /** The selected grid's outline, while the setup is a seeded pool (null otherwise). */
+  /** The outline of the simulated grid, always drawn so the simulation's reach is visible; null before grids load. */
   footprint: [number, number][] | null
   seedMarker: LatLon | null
   /** Places the seed marker; null while clicks can't place one (not seeded pool, or a run is busy). */
