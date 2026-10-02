@@ -3,7 +3,13 @@ import pytest
 import rasterio
 from affine import Affine
 
-from ingestion.landcover import align_to_reference_grid, build_roughness_matrix, classes_to_roughness
+from ingestion.landcover import (
+    LANDCOVER_CLASS_NAMES,
+    MANNING_N_BY_CLASS,
+    align_to_reference_grid,
+    build_roughness_matrix,
+    classes_to_roughness,
+)
 
 
 def test_classes_to_roughness_maps_known_classes():
@@ -12,6 +18,20 @@ def test_classes_to_roughness_maps_known_classes():
     n = classes_to_roughness(classes)
 
     assert n.tolist() == [[0.030, 0.040, 0.150]]
+
+
+def test_every_mapped_class_has_a_name():
+    assert LANDCOVER_CLASS_NAMES.keys() == MANNING_N_BY_CLASS.keys()
+
+
+def test_per_class_table_lookup_matches_classes_to_roughness():
+    """The frontend derives each cell's n from GET /grids/{resolution}/inputs' class
+    table; that must be exactly the N the engine runs on."""
+    classes = np.array([[3, 9, 12], [15, 21, 24], [25, 33, 41]], dtype=np.uint8)
+
+    from_table = np.vectorize(MANNING_N_BY_CLASS.__getitem__)(classes)
+
+    np.testing.assert_array_equal(from_table, classes_to_roughness(classes))
 
 
 def test_classes_to_roughness_raises_on_unmapped_class():

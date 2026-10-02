@@ -62,6 +62,24 @@ MANNING_N_BY_CLASS = {
     41: 0.035,  # Other Temporary Crops (NLCD 82 Cultivated Crops)
 }
 
+# MapBiomas Collection 10 legend names for the classes above, for labelling the
+# roughness layer and the cell inspector in the frontend.
+LANDCOVER_CLASS_NAMES = {
+    3: "Forest Formation",
+    6: "Floodable Forest",
+    9: "Forest Plantation",
+    11: "Wetland",
+    12: "Grassland",
+    15: "Pasture",
+    21: "Mosaic of Uses",
+    24: "Urban Area",
+    25: "Other non-Vegetated Area",
+    30: "Mining",
+    33: "River, Lake and Ocean",
+    39: "Soybean",
+    41: "Other Temporary Crops",
+}
+
 
 def classes_to_roughness(classes: np.ndarray) -> np.ndarray:
     """Map an array of MapBiomas class IDs to Manning's n via `MANNING_N_BY_CLASS`.

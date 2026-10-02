@@ -41,6 +41,9 @@ from ingestion.hydrograph import Hydrograph
 class Grid:
     Z: np.ndarray
     N: np.ndarray
+    # MapBiomas class ID per cell, the classes N was looked up from - served to the
+    # frontend's roughness layer and cell inspector, since N alone can't name them.
+    landcover: np.ndarray
     dx: float  # cell size, m
     bounds: tuple[float, float, float, float]  # west, south, east, north (EPSG:4326)
     # The grid's own projected CRS and affine transform (row/col <-> CRS coordinates),

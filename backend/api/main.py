@@ -11,7 +11,7 @@ from config.settings import CORS_ALLOWED_ORIGINS, HYDROGRAPH_INFLOW_EDGE, HYDROG
 from ingestion.dem import build_elevation_matrix, get_geographic_bounds, get_georeference
 from ingestion.flood_extent import build_validation_reference
 from ingestion.hydrograph import build_hydrograph, find_boundary_inflow_mask, find_boundary_outlet
-from ingestion.landcover import build_roughness_matrix
+from ingestion.landcover import align_to_reference_grid, build_roughness_matrix
 
 
 def _load_grid(dem_path: Path, landcover_path: Path, resolution: float) -> state.Grid:
@@ -22,6 +22,7 @@ def _load_grid(dem_path: Path, landcover_path: Path, resolution: float) -> state
     return state.Grid(
         Z=Z,
         N=N,
+        landcover=align_to_reference_grid(settings.LANDCOVER_RAW_PATH, dem_path),
         dx=resolution,
         bounds=get_geographic_bounds(dem_path),
         crs=crs,

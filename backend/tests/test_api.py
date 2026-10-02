@@ -30,13 +30,17 @@ TEST_CRS = "EPSG:31982"
 TEST_TRANSFORM = Affine(30.0, 0.0, 404043.3, 0.0, -30.0, 6741197.92)
 
 
-def _grid(Z, N=None, inflow_mask=None, boundary_elevation=None, boundary_roughness=None, dx=30.0, bounds=TEST_BOUNDS):
+def _grid(
+    Z, N=None, inflow_mask=None, boundary_elevation=None, boundary_roughness=None, dx=30.0, bounds=TEST_BOUNDS,
+    landcover=None,
+):
     """A synthetic stand-in for api.state.Grid. No outlet by default (walled on
     every side, the same as the engines' own default), so tests that need one
-    pass it explicitly."""
+    pass it explicitly. Land cover defaults to all Pasture (class 15)."""
     return Grid(
         Z=Z,
         N=np.full(Z.shape, 0.05) if N is None else N,
+        landcover=np.full(Z.shape, 15, dtype=np.uint8) if landcover is None else landcover,
         dx=dx,
         bounds=bounds,
         crs=TEST_CRS,
@@ -463,6 +467,43 @@ def test_list_grids_returns_every_served_grid_with_its_footprint():
     assert len(footprint) == 4
     top_left = _latlon_of(TEST_TRANSFORM, 0, 0)
     assert footprint[0] == pytest.approx([top_left["lat"], top_left["lon"]])
+
+
+def test_grid_inputs_serves_elevation_and_landcover_row_major():
+    response = client.get("/grids/30/inputs")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["resolution"] == 30
+    assert body["grid_shape"] == [3, 3]
+    assert body["dx"] == 30.0
+    assert body["elevation"] == TEST_Z.ravel().tolist()
+    assert body["landcover"] == [15] * 9
+    assert body["classes"] == [{"id": 15, "name": "Pasture", "manning_n": 0.030}]
+
+
+def test_grid_inputs_lists_only_the_classes_present_with_their_roughness():
+    landcover = np.array([[24, 15, 15], [33, 15, 24], [15, 15, 15]], dtype=np.uint8)  # Urban, Pasture, Water
+    Z = np.array([[1.234, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.006]])
+    original = app.dependency_overrides[get_grids]
+    app.dependency_overrides[get_grids] = lambda: {30: _grid(Z, landcover=landcover)}
+    try:
+        body = client.get("/grids/30/inputs").json()
+    finally:
+        app.dependency_overrides[get_grids] = original
+
+    assert body["landcover"] == [24, 15, 15, 33, 15, 24, 15, 15, 15]
+    assert body["elevation"][0] == 1.23
+    assert body["elevation"][-1] == 9.01
+    assert body["classes"] == [
+        {"id": 15, "name": "Pasture", "manning_n": 0.030},
+        {"id": 24, "name": "Urban Area", "manning_n": 0.150},
+        {"id": 33, "name": "River, Lake and Ocean", "manning_n": 0.040},
+    ]
+
+
+def test_grid_inputs_rejects_an_unserved_resolution():
+    assert client.get("/grids/45/inputs").status_code == 404
 
 
 # --- neighborhood (temporal engine only) ------------------------------------------------------------------

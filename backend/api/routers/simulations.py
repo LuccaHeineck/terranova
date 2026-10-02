@@ -44,6 +44,7 @@ from starlette.websockets import WebSocketState
 from api.state import Grid, get_grids, get_hydrograph
 from ingestion.dem import grid_footprint, lonlat_to_cell
 from ingestion.hydrograph import Hydrograph, discharge_to_inflow
+from ingestion.landcover import LANDCOVER_CLASS_NAMES, MANNING_N_BY_CLASS
 from simulation.engine import (
     DEFAULT_OUTFLOW_FRACTION,
     VON_NEUMANN_MAX_OUTFLOW_FRACTION,
@@ -155,6 +156,26 @@ class GridInfo(BaseModel):
     footprint: list[tuple[float, float]]
 
 
+class LandcoverClass(BaseModel):
+    id: int  # MapBiomas class ID
+    name: str
+    manning_n: float
+
+
+class GridInputs(BaseModel):
+    """A grid's static model inputs, for drawing them and inspecting a cell client-side."""
+
+    resolution: int
+    grid_shape: tuple[int, int]
+    dx: float  # cell size, m
+    # Row-major flat arrays (row * cols + col), the same order frames' depth grids use.
+    elevation: list[float]  # Z, m, rounded to the centimetre
+    landcover: list[int]  # MapBiomas class ID per cell
+    # The classes present, ascending by id. Looking a cell's class up here gives
+    # exactly the Manning's n the engine uses (N is built from the same table).
+    classes: list[LandcoverClass]
+
+
 @dataclass
 class _PendingRun:
     params: SimulationParams
@@ -188,6 +209,25 @@ def list_grids(grids: dict[int, Grid] = Depends(get_grids)) -> list[GridInfo]:
         )
         for resolution, grid in sorted(grids.items())
     ]
+
+
+@router.get("/grids/{resolution}/inputs", response_model=GridInputs)
+def grid_inputs(resolution: int, grids: dict[int, Grid] = Depends(get_grids)) -> GridInputs:
+    """The terrain Z and land cover the engine runs on, so the map can show what the automaton sees."""
+    grid = grids.get(resolution)
+    if grid is None:
+        raise HTTPException(status_code=404, detail=f"no grid is served at {resolution}m; see GET /grids")
+    return GridInputs(
+        resolution=resolution,
+        grid_shape=grid.Z.shape,
+        dx=grid.dx,
+        elevation=np.round(grid.Z, 2).ravel().tolist(),
+        landcover=grid.landcover.ravel().tolist(),
+        classes=[
+            LandcoverClass(id=class_id, name=LANDCOVER_CLASS_NAMES[class_id], manning_n=MANNING_N_BY_CLASS[class_id])
+            for class_id in np.unique(grid.landcover).tolist()
+        ],
+    )
 
 
 @router.post("/simulations", response_model=SimulationCreated)
