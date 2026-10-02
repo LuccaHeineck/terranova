@@ -128,6 +128,9 @@ SGB/CPRM May 2024 peak extent and the Estrela coverage-gap exclusion (`docs/tcc-
 `ingestion.flood_extent.build_validation_reference` from the raw stage layers
 `scripts/download_flood_extent.py` saves, best-effort like the hydrograph (missing files -> 503). The
 frontend scores frames against it itself, so the numbers follow the timeline without a request per frame.
+`GET /grids/{resolution}/inputs` serves a grid's static model inputs, for the frontend's input layers and cell
+inspector. It sends terrain `Z` and the MapBiomas class per cell, row-major, plus the present classes' names and
+Manning's n. `Grid.landcover` keeps the class raster because `N` alone can't name a class.
 
 What does NOT belong here: any CA math (delegates to `simulation/`), any raster parsing (delegates to
 `ingestion/`).
@@ -218,9 +221,12 @@ UTM transform), rejecting an outside point with a 422.
 
 The shell (`App.tsx`) is a top bar (`TopBar`: run status and the Start/Stop button, which submits the setup
 form from outside it through `form="run-setup"`) above a left menu (`Sidebar`: an icon rail with Setup /
-Results / Log tabs) and the map. Every tab panel stays mounted and is only hidden: `ConfigPanel` keeps its
-fields in local state, which would reset on unmount, and Start needs the form to exist. Starting a run switches
-to Results; below 900px the panel is a drawer over the map. Visual tokens (the "basalt" chrome colors, gauge
+Results / Log tabs, and an About item at its foot) and the map. Every tab panel stays mounted and is only hidden:
+`ConfigPanel` keeps its fields in local state, which would reset on unmount, and Start needs the form to exist.
+Starting a run switches to Results; the panel collapses (the active rail item or the rail's panel button toggles
+it) to give the map the full width, and below 900px it is a drawer over the map. About is a page, not a panel:
+`AboutPage` (project introduction and user guide) covers the map, which stays mounted and `inert` under it so a
+run keeps streaming. Its quoted results (CSI, run times) are hand-kept constants at the top of the file. Visual tokens (the "basalt" chrome colors, gauge
 yellow accent, Barlow / Barlow Semi Condensed type self-hosted via `@fontsource`) are a Tailwind `@theme` in
 `src/index.css`, along with the range-input styling (the timeline's ruler track) and Leaflet control overrides.
 `src/components/ui/` holds the small presentational form primitives (segmented control, option card, slider
@@ -231,6 +237,35 @@ The map's background is chosen from `src/geo/basemaps.ts` (Relief, Topographic, 
 per browser in `localStorage`): each basemap is a base tile layer, optionally Esri's hillshade multiplied over it
 in its own pane below the flood overlay, and optionally a labels layer in a pane above the overlay. The flood
 overlay never changes with the basemap.
+
+The map's controls are split by what they change:
+
+- the top-right "Layers" row holds on/off toggles for data drawn on the map, each with a swatch of its colours:
+  Observed, and the two model inputs, Terrain and Roughness;
+- the bottom-right basemap picker only chooses the background.
+
+Terrain and Roughness are exclusive and remembered per browser. Each draws one of the grid's static inputs from
+`GET /grids/{resolution}/inputs`, one pixel per cell (`rendering/inputsToImage.ts`). They have their own pane
+between the relief and the flood overlay. Terrain is a tinted relief of the model's own DEM, shaded by a Horn
+hillshade computed client-side; Roughness is Manning's n, one shade per distinct value, by rank (the
+region's values cluster, so a value scale made the low ones look alike).
+
+A map click inspects the cell under it (`components/CellInspector.tsx`). While a seed is being placed, the
+click also places it. Both Compare panes are on the same grid, so the cell is the same in each and is
+outlined in both. The card says where each number comes from:
+
+- **Model inputs**, shared by both engines: Z, land cover and n.
+- One section per engine whose pane is on screen, marked with that pane's colour:
+  - **Temporal CA**: the depth and water surface at the timeline's frame, and the first-wet time
+    (`rendering/firstWet.ts`, stamped on the temporal layer as frames arrive, since the buffer thins old ones);
+  - **Fast mode**: the steady peak depth.
+- **Outflow split**: a 3x3 grid from `rendering/outflowShares.ts`, a client-side mirror of the temporal
+  engine's weighting, the way `observed.ts` mirrors the metrics. It uses the temporal frame shown, or bare
+  terrain when none is on screen. The fast engine doesn't route water cell to cell, so it has no split of
+  its own.
+
+Cells are picked in image space (`geo/cell.ts`), the same way the overlays are stretched over `bounds`, so the
+numbers match the pixel clicked.
 
 An "Observed" toggle on the map (shown only while the map's grid is the 90m one the observation is on) draws
 each pane against the observed May 2024 extent instead of depth: hit / missed / false alarm, plus "not
