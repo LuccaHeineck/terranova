@@ -118,3 +118,19 @@ export function NeighborhoodGlyph({ kind }: { kind: 'moore' | 'von_neumann' }) {
     </svg>
   )
 }
+
+/** About: an open book. */
+export const IconAbout = (props: SVGProps<SVGSVGElement>) => (
+  <Icon {...props}>
+    <path d="M10 5.5C8.5 4.3 6.3 4 3.5 4.3v10.4c2.8-.3 5 0 6.5 1.3 1.5-1.3 3.7-1.6 6.5-1.3V4.3C13.7 4 11.5 4.3 10 5.5z" />
+    <path d="M10 5.5V16" />
+  </Icon>
+)
+
+/** The side panel's edge with a chevron: points left to collapse the panel, right (rotated) to expand it. */
+export const IconPanel = (props: SVGProps<SVGSVGElement>) => (
+  <Icon {...props}>
+    <rect x="3" y="4" width="14" height="12" rx="1.5" />
+    <path d="M8 4v12M13.5 8l-2 2 2 2" />
+  </Icon>
+)

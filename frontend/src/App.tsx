@@ -9,8 +9,9 @@ import { ConfigPanel } from './components/ConfigPanel'
 import { FloodMap } from './components/FloodMap'
 import { LogPanel } from './components/LogPanel'
 import { ResultsPanel } from './components/ResultsPanel'
-import { Sidebar } from './components/Sidebar'
-import type { SidebarTab } from './components/Sidebar'
+import { AboutPage } from './components/AboutPage'
+import { Sidebar, WIDE_SCREEN_QUERY } from './components/Sidebar'
+import type { Page, SidebarTab } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
 
 export default function App() {
@@ -38,11 +39,14 @@ export default function App() {
   const observedOnMap = observed && observed.resolution === mapResolution ? observed : null
 
   const [tab, setTab] = useState<SidebarTab>('setup')
+  const [page, setPage] = useState<Page>('map')
   const [panelOpen, setPanelOpen] = useState(true)
-  // A run's results are what to look at next: show them, and on a narrow screen get the drawer off the map.
+  // A run's results are what to look at next: show them on the map, and on a narrow screen get the drawer off
+  // it. A wide screen keeps the panel as the user left it, collapsed or not.
   const showResults = () => {
     setTab('results')
-    setPanelOpen(false)
+    setPage('map')
+    if (!window.matchMedia(WIDE_SCREEN_QUERY).matches) setPanelOpen(false)
   }
   const start = (params: SimulationParams) => {
     showResults()
@@ -65,6 +69,8 @@ export default function App() {
         <Sidebar
           tab={tab}
           onTab={setTab}
+          page={page}
+          onPage={setPage}
           open={panelOpen}
           onOpenChange={setPanelOpen}
           badges={{ results: run.error ? 'error' : busy ? 'live' : null }}
@@ -94,22 +100,30 @@ export default function App() {
             log: <LogPanel log={run.log} />,
           }}
         />
-        <main className="min-w-0 flex-1">
-          <FloodMap
-            // Before the first run, frame the selected grid so its outline can be clicked.
-            bounds={run.bounds ?? grid?.bounds ?? null}
-            layers={run.layers}
-            activeEngine={run.activeEngine}
-            runCount={run.runCount}
-            replayActive={run.replayActive}
-            timeline={timeline}
-            footprint={footprint}
-            seedMarker={setup.seeding ? setup.seed : null}
-            onMapClick={onMapClick}
-            mapGrid={grids?.[mapResolution] ?? null}
-            seedNotice={setup.seeding ? setup.seedNotice : null}
-            observed={observedOnMap}
-          />
+        <main className="relative min-w-0 flex-1">
+          {/* The map stays mounted under the About page, so a run keeps streaming and the view keeps its place. */}
+          <div inert={page === 'about'} className="h-full">
+            <FloodMap
+              // Before the first run, frame the selected grid so its outline can be clicked.
+              bounds={run.bounds ?? grid?.bounds ?? null}
+              layers={run.layers}
+              activeEngine={run.activeEngine}
+              runCount={run.runCount}
+              replayActive={run.replayActive}
+              timeline={timeline}
+              footprint={footprint}
+              seedMarker={setup.seeding ? setup.seed : null}
+              onMapClick={onMapClick}
+              mapGrid={grids?.[mapResolution] ?? null}
+              seedNotice={setup.seeding ? setup.seedNotice : null}
+              observed={observedOnMap}
+            />
+          </div>
+          {page === 'about' && (
+            <div className="absolute inset-0 z-1100">
+              <AboutPage onClose={() => setPage('map')} />
+            </div>
+          )}
         </main>
       </div>
     </div>
