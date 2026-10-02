@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { NEIGHBORHOOD_LABEL } from '../types/simulation'
-import type { Bounds } from '../types/simulation'
+import type { Bounds, HydrographRecord } from '../types/simulation'
 import type { CompactFrame } from '../rendering/depthGrid'
 import type { ResultLayer, ResultLayers, SimulationStatus } from '../hooks/useSimulationRun'
 import {
@@ -14,6 +14,7 @@ import {
 import type { ExtentAgreement } from '../rendering/depthToImage'
 import { scoreAgainstObserved } from '../rendering/observed'
 import type { ObservedMasks } from '../rendering/observed'
+import { HydrographChart } from './HydrographChart'
 import { Callout } from './ui/Callout'
 import { Section } from './ui/Section'
 
@@ -29,6 +30,8 @@ interface ResultsPanelProps {
   error: string | null
   /** The observed May 2024 extent, if the API serves it; scored only against runs on its grid. */
   observed: ObservedMasks | null
+  /** The May 2024 gauge record, if the API serves it; charted while a real-event run is shown. */
+  hydrograph: HydrographRecord | null
   onGoToSetup: () => void
 }
 
@@ -261,6 +264,7 @@ export function ResultsPanel({
   followingLatest,
   error,
   observed,
+  hydrograph,
   onGoToSetup,
 }: ResultsPanelProps) {
   const { temporal, fast } = layers
@@ -310,6 +314,15 @@ export function ResultsPanel({
               </>
             )}
           </dl>
+        </Section>
+      )}
+
+      {hydrograph && (temporal?.mode === 'gauge_driven' || fast) && (
+        <Section title="May 2024 gauge record">
+          <HydrographChart
+            record={hydrograph}
+            markerSeconds={temporal?.mode === 'gauge_driven' ? (temporalFrame?.elapsed_time ?? null) : null}
+          />
         </Section>
       )}
 

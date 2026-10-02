@@ -5,6 +5,7 @@ import { useTimeline } from './hooks/useTimeline'
 import { useGrids } from './hooks/useGrids'
 import { useRunSetup } from './hooks/useRunSetup'
 import { useObservedExtent } from './hooks/useObservedExtent'
+import { useHydrograph } from './hooks/useHydrograph'
 import { ConfigPanel } from './components/ConfigPanel'
 import { FloodMap } from './components/FloodMap'
 import { LogPanel } from './components/LogPanel'
@@ -37,6 +38,7 @@ export default function App() {
   // the selected one.
   const mapResolution = shownLayer?.resolution ?? setup.resolution
   const observedOnMap = observed && observed.resolution === mapResolution ? observed : null
+  const hydrograph = useHydrograph()
 
   const [tab, setTab] = useState<SidebarTab>('setup')
   const [page, setPage] = useState<Page>('map')
@@ -94,6 +96,7 @@ export default function App() {
                 followingLatest={timeline.following}
                 error={run.error}
                 observed={observed}
+                hydrograph={hydrograph}
                 onGoToSetup={() => setTab('setup')}
               />
             ),

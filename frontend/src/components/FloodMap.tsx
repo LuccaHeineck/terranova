@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import L from 'leaflet'
 import { NEIGHBORHOOD_LABEL } from '../types/simulation'
 import type { Bounds, GridInfo, LatLon, Neighborhood, Resolution } from '../types/simulation'
 import type { CompactFrame, DepthGrid } from '../rendering/depthGrid'
 import type { Engine, ResultLayers } from '../hooks/useSimulationRun'
 import type { Timeline as TimelineState } from '../hooks/useTimeline'
-import { depthToImageDataUrl, extentToImageDataUrl } from '../rendering/depthToImage'
+import {
+  depthToImageDataUrl,
+  extentToImageDataUrl,
+  FLOODED_DEPTH_THRESHOLD_M,
+  isWet,
+  OVERLAY_OPACITY,
+} from '../rendering/depthToImage'
 import { agreementToImageDataUrl, OBSERVED_COLOR, observedToImageDataUrl } from '../rendering/observed'
 import type { ObservedMasks } from '../rendering/observed'
 import {
@@ -17,6 +23,13 @@ import {
   terrainToImageDataUrl,
 } from '../rendering/inputsToImage'
 import { isNeighbor } from '../rendering/outflowShares'
+import { arrivalBands, arrivalToImageDataUrl } from '../rendering/arrivalTime'
+import { frameTime } from '../rendering/firstWet'
+import { download, snapshotMap } from '../rendering/mapSnapshot'
+import type { SnapshotLegend } from '../rendering/mapSnapshot'
+import { agreementLegendSpec, arrivalLegendSpec, depthLegendSpec, extentLegendSpec } from '../rendering/legendSpecs'
+import { extentsToGeoJson } from '../geo/extentGeoJson'
+import type { ExtentFeatureInput } from '../geo/extentGeoJson'
 import { BASEMAPS, DEFAULT_BASEMAP } from '../geo/basemaps'
 import type { BasemapId } from '../geo/basemaps'
 import { cellAt, cellRect } from '../geo/cell'
@@ -24,6 +37,7 @@ import type { Cell, CellRect } from '../geo/cell'
 import { containsPoint } from '../geo/footprint'
 import { useGridInputs } from '../hooks/useGridInputs'
 import { AgreementLegend } from './AgreementLegend'
+import { ArrivalLegend } from './ArrivalLegend'
 import { CellInspector } from './CellInspector'
 import { RoughnessLegend, TerrainLegend } from './InputLegend'
 import { DepthLegend } from './DepthLegend'
@@ -32,6 +46,32 @@ import { MapPane } from './MapPane'
 import { Timeline } from './Timeline'
 
 type MapView = Engine | 'compare'
+
+/**
+ * What the temporal pane draws: the selected frame's depth, when each cell first flooded (up to the selected
+ * frame), or the deepest water each cell reached over the run. All three come from frames the client already has
+ * (useSimulationRun records first-wet times and the depth envelope as frames arrive).
+ */
+type TemporalProduct = 'depth' | 'arrival' | 'maxDepth'
+
+const PRODUCT_LABEL: Record<TemporalProduct, string> = {
+  depth: 'Depth',
+  arrival: 'Arrival',
+  maxDepth: 'Max depth',
+}
+
+const PRODUCT_TITLE: Record<TemporalProduct, string> = {
+  depth: 'Water depth at the timeline frame',
+  arrival: 'When each cell first flooded, up to the timeline frame',
+  maxDepth: 'Deepest water each cell reached over the run',
+}
+
+/** The top-right caption of a single temporal pane. */
+const PRODUCT_CAPTION: Record<TemporalProduct, string> = {
+  depth: 'Temporal CA depth',
+  arrival: 'Temporal CA arrival time',
+  maxDepth: 'Temporal CA maximum depth',
+}
 
 interface FloodMapProps {
   bounds: Bounds | null
@@ -83,6 +123,18 @@ function resolveView(view: MapView, available: Record<MapView, boolean>): MapVie
 }
 
 const BASEMAP_STORAGE_KEY = 'terranova.basemap'
+const OPACITY_STORAGE_KEY = 'terranova.overlayOpacity'
+
+/** The overlay opacity set last time in this browser, if storage is readable and the value is sane. */
+function storedOpacity(): number {
+  try {
+    const stored = Number(localStorage.getItem(OPACITY_STORAGE_KEY))
+    if (stored >= 0.2 && stored <= 1) return stored
+  } catch {
+    // Storage blocked: fall back to the default.
+  }
+  return OVERLAY_OPACITY
+}
 
 /** An on/off map layer, with a swatch of the colors it draws in (dimmed while off). */
 function LayerToggle({
@@ -166,11 +218,28 @@ function temporalName(neighborhood: Neighborhood | undefined): string {
   return !neighborhood || neighborhood === 'moore' ? 'Temporal CA' : `Temporal CA (${NEIGHBORHOOD_LABEL[neighborhood]})`
 }
 
-function paneLabel(engine: Engine, frame: CompactFrame | null, neighborhood?: Neighborhood): string {
+/** When a frame is: "t = 12.3 h" for a gauge-driven run, "step 1,200" for a seeded pool. */
+function frameWhen(frame: CompactFrame): string {
+  return frame.elapsed_time !== undefined
+    ? `t = ${(frame.elapsed_time / 3600).toFixed(1)} h`
+    : `step ${frame.step.toLocaleString('en-US')}`
+}
+
+function paneLabel(
+  engine: Engine,
+  frame: CompactFrame | null,
+  neighborhood?: Neighborhood,
+  product: TemporalProduct = 'depth',
+): string {
   if (!frame) return engine === 'fast' ? 'Fast: computing…' : `${temporalName(neighborhood)}: starting…`
   if (engine === 'fast') return 'Fast: steady peak extent'
-  const hours = (frame.elapsed_time ?? 0) / 3600
-  return `${temporalName(neighborhood)}: t = ${hours.toFixed(1)} h`
+  if (product === 'maxDepth') return `${temporalName(neighborhood)}: maximum depth`
+  return `${temporalName(neighborhood)}: ${frameWhen(frame)}`
+}
+
+/** "2026-10-02", for the exported caption. */
+function today(): string {
+  return new Date().toISOString().slice(0, 10)
 }
 
 // The temporal overlay is shaded by depth; the fast one shows extent only, since only its extent is validated.
@@ -275,6 +344,15 @@ export function FloodMap({
       // Not remembered across visits, but still applied now.
     }
   }
+  const [opacity, setOpacity] = useState(storedOpacity)
+  const changeOpacity = (value: number) => {
+    setOpacity(value)
+    try {
+      localStorage.setItem(OPACITY_STORAGE_KEY, String(value))
+    } catch {
+      // Not remembered across visits, but still applied now.
+    }
+  }
   // A manual view choice only lasts for the run it was made in; a new run shows the engine just run, or
   // Compare for the May 2024 replay.
   const [choice, setChoice] = useState<{ view: MapView; runCount: number } | null>(null)
@@ -349,6 +427,7 @@ export function FloodMap({
     crosshair: Boolean(onMapClick),
     inputImage,
     highlight,
+    opacity,
   }
 
   // Drawing against the observed extent is a toggle that holds across runs; it only applies while the map's
@@ -356,15 +435,54 @@ export function FloodMap({
   const [observedOn, setObservedOn] = useState(false)
   const against = observedOn ? observed : null
 
+  // The other temporal products apply while drawing the run on its own: against the observed extent the pane
+  // always shows the selected frame's agreement.
+  const [product, setProduct] = useState<TemporalProduct>('depth')
+  const temporalLayer = layers.temporal
+  const firstWet = temporalLayer?.firstWet ?? null
+  const maxDepth = temporalLayer?.maxDepth ?? null
+  const shownProduct: TemporalProduct =
+    against || (product === 'arrival' && !firstWet) || (product === 'maxDepth' && !maxDepth) ? 'depth' : product
+  // The bands span the run so far (its newest frame), so they hold still while scrubbing back.
+  const span = firstWet && temporalLayer?.frame ? frameTime(temporalLayer.frame, firstWet.unit) : 0
+  const bands = useMemo(() => (firstWet ? arrivalBands(span, firstWet.unit) : null), [firstWet, span])
+  const arrivalUpTo = firstWet && timeline.frame ? frameTime(timeline.frame, firstWet.unit) : 0
   // The temporal pane draws the timeline's selected frame (the newest one while following live).
-  const temporalUrl = useOverlayUrl('temporal', timeline.frame, showsTemporal, against)
+  const depthUrl = useOverlayUrl('temporal', timeline.frame, showsTemporal && shownProduct === 'depth', against)
+  const arrivalUrl = useMemo(
+    () =>
+      showsTemporal && shownProduct === 'arrival' && firstWet && bands
+        ? arrivalToImageDataUrl(firstWet, arrivalUpTo, bands)
+        : null,
+    [showsTemporal, shownProduct, firstWet, arrivalUpTo, bands],
+  )
+  const maxDepthUrl = useMemo(
+    () => (showsTemporal && shownProduct === 'maxDepth' && maxDepth ? RENDER.temporal(maxDepth) : null),
+    [showsTemporal, shownProduct, maxDepth],
+  )
+  const temporalUrl = shownProduct === 'arrival' ? arrivalUrl : shownProduct === 'maxDepth' ? maxDepthUrl : depthUrl
   const fastUrl = useOverlayUrl('fast', layers.fast?.frame ?? null, showsFast, against)
   // With nothing simulated to draw yet, the toggle shows the observed extent on its own.
   const observedUrl = useMemo(() => (against && !shown ? observedToImageDataUrl(against) : null), [against, shown])
   // The primary pane shows the temporal result, or the fast one when that's the only view.
   const primary: Engine = shown === 'fast' ? 'fast' : 'temporal'
-  const legendFor = (engine: Engine) =>
-    against ? <AgreementLegend mode="agreement" stageM={against.stageM} /> : LEGEND[engine]
+  const legendFor = (engine: Engine): ReactNode => {
+    if (against) return <AgreementLegend mode="agreement" stageM={against.stageM} />
+    if (engine === 'temporal' && shownProduct === 'arrival' && bands && firstWet) {
+      return <ArrivalLegend bands={bands} unit={firstWet.unit} />
+    }
+    if (engine === 'temporal' && shownProduct === 'maxDepth') {
+      return <DepthLegend title="Maximum depth (m)" note={timeline.live ? 'Over the run so far.' : 'Over the run.'} />
+    }
+    return LEGEND[engine]
+  }
+  const exportLegendFor = (engine: Engine): SnapshotLegend => {
+    if (against) return agreementLegendSpec(against.stageM)
+    if (engine === 'fast') return extentLegendSpec()
+    if (shownProduct === 'arrival' && bands && firstWet) return arrivalLegendSpec(bands, firstWet.unit)
+    if (shownProduct === 'maxDepth') return depthLegendSpec('Maximum depth (m)', 'Over the run.')
+    return depthLegendSpec()
+  }
   const inputLegend =
     inputImage && inputs ? (
       inputLayer === 'terrain' ? <TerrainLegend inputs={inputs} /> : <RoughnessLegend inputs={inputs} />
@@ -376,14 +494,109 @@ export function FloodMap({
   ) : null
   const { onPrimaryReady, onSecondaryReady } = useSyncedMaps(bounds)
 
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const [exportNotice, setExportNotice] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
+  useEffect(() => {
+    if (!exportNotice) return
+    const timer = setTimeout(() => setExportNotice(null), 6000)
+    return () => clearTimeout(timer)
+  }, [exportNotice])
+  const shownEngines: Engine[] = compare ? ['temporal', 'fast'] : shown ? [primary] : []
+  const resolution = (temporalLayer ?? layers.fast)?.resolution
+  const fileStem = () => {
+    const what = compare ? 'compare' : primary === 'fast' ? 'fast' : `temporal-${shownProduct.toLowerCase()}`
+    const frame = timeline.frame
+    const when =
+      !showsTemporal || !frame || shownProduct === 'maxDepth'
+        ? ''
+        : frame.elapsed_time !== undefined
+          ? `-t${(frame.elapsed_time / 3600).toFixed(1)}h`
+          : `-step${frame.step}`
+    return `terranova-${resolution ?? 'grid'}m-${what}${when}`
+  }
+  const paneTitle = (engine: Engine) =>
+    engine === 'fast'
+      ? 'Fast mode: steady peak extent'
+      : `${paneLabel('temporal', timeline.frame, temporalLayer?.neighborhood, shownProduct)}. ${
+          against ? 'Against the observed May 2024 extent' : PRODUCT_TITLE[shownProduct]
+        }`
+
+  const exportPng = async () => {
+    const containers = Array.from(rootRef.current?.querySelectorAll<HTMLElement>('.leaflet-container') ?? [])
+    if (shownEngines.length === 0 || containers.length < shownEngines.length) return
+    setExporting(true)
+    try {
+      const snapshot = await snapshotMap(
+        shownEngines.map((engine, i) => ({
+          container: containers[i],
+          title: paneTitle(engine),
+          legend: exportLegendFor(engine),
+          swatchOpacity: opacity,
+        })),
+        `Terranova CA flood simulator, Vale do Taquari${resolution ? `, ${resolution} m grid` : ''}. Exported ${today()}.`,
+      )
+      download(snapshot.blob, `${fileStem()}.png`)
+      setExportNotice(
+        snapshot.missingTiles > 0
+          ? `Map saved, without ${snapshot.missingTiles} basemap tiles whose server blocks cross-origin reads.`
+          : 'Map saved as PNG.',
+      )
+    } catch (e) {
+      setExportNotice(`PNG export failed: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const exportGeoJson = () => {
+    if (!bounds) return
+    const features: ExtentFeatureInput[] = []
+    for (const engine of shownEngines) {
+      const frame = engine === 'fast' ? layers.fast?.frame : timeline.frame
+      const envelope = engine === 'temporal' && shownProduct === 'maxDepth'
+      const grid = envelope ? maxDepth : frame?.depth
+      if (!frame || !grid) continue
+      const mask = new Uint8Array(grid.values.length)
+      for (let cell = 0; cell < mask.length; cell++) mask[cell] = isWet(grid.values[cell]) ? 1 : 0
+      features.push({
+        mask,
+        rows: grid.rows,
+        cols: grid.cols,
+        properties: {
+          engine,
+          extent: engine === 'fast' ? 'steady_peak' : envelope ? 'maximum_over_run' : 'frame',
+          elapsed_hours:
+            engine === 'fast'
+              ? (frame.peak_elapsed_time ?? 0) / 3600
+              : envelope || frame.elapsed_time === undefined
+                ? null
+                : frame.elapsed_time / 3600,
+          step: engine === 'fast' || envelope ? null : frame.step,
+          resolution_m: resolution ?? null,
+          neighborhood: engine === 'fast' ? 'moore' : (temporalLayer?.neighborhood ?? null),
+          flooded_depth_threshold_m: FLOODED_DEPTH_THRESHOLD_M,
+        },
+      })
+    }
+    if (features.length === 0) return
+    // The grid's true outline places the cells; only when it is the results' grid (else the overlay's bounds).
+    const footprintOnGrid = mapGrid && mapGrid.resolution === resolution ? mapGrid.footprint : null
+    const geojson = extentsToGeoJson(features, footprintOnGrid, bounds)
+    download(new Blob([JSON.stringify(geojson)], { type: 'application/geo+json' }), `${fileStem()}.geojson`)
+    setExportNotice('Flooded extent saved as GeoJSON (WGS84).')
+  }
+  // The overlay controls sit above the basemap picker whenever something is drawn; the inspector card clears them.
+  const overlayControls = Boolean(shown || observedUrl)
+
   return (
-    <div className="relative flex h-full w-full flex-col">
+    <div ref={rootRef} className="relative flex h-full w-full flex-col">
       {/* The primary pane stays mounted across view changes; Compare adds the fast pane beside it. */}
       <div className={`relative grid min-h-0 w-full flex-1 ${compare ? 'grid-cols-2 gap-0.5 bg-basalt-line' : 'grid-cols-1'}`}>
         <MapPane
           bounds={bounds}
           imageUrl={observedUrl ?? (primary === 'fast' ? fastUrl : temporalUrl)}
-          label={compare ? paneLabel('temporal', timeline.frame, layers.temporal?.neighborhood) : undefined}
+          label={compare ? paneLabel('temporal', timeline.frame, layers.temporal?.neighborhood, shownProduct) : undefined}
           // The input layer's key sits under the primary pane only: in Compare both panes draw the same layer.
           legend={
             primaryFloodLegend || inputLegend ? (
@@ -407,32 +620,103 @@ export function FloodMap({
             {...paneProps}
           />
         )}
-        <div
-          role="radiogroup"
-          aria-label="Basemap"
-          className="absolute right-3 bottom-7 z-1000 flex gap-0.5 rounded-md bg-basalt/95 p-0.5 text-xs shadow-lg backdrop-blur-sm"
-        >
-          {Object.values(BASEMAPS).map(({ id, label }) => (
-            <button
-              key={id}
-              type="button"
-              role="radio"
-              aria-checked={basemapId === id}
-              onClick={() => selectBasemap(id)}
-              className={`rounded px-2 py-1 font-medium transition-colors ${
-                basemapId === id ? 'bg-mist text-basalt' : 'text-mist hover:bg-basalt-raised'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
+        <div className="absolute right-3 bottom-7 z-1000 flex flex-col items-end gap-1.5 text-xs">
+          {overlayControls && (
+            <div className="flex flex-col items-stretch gap-1.5 rounded-md bg-basalt/95 p-1.5 shadow-lg backdrop-blur-sm">
+              {showsTemporal && (firstWet || maxDepth) && (
+                <div
+                  role="radiogroup"
+                  aria-label="Temporal layer"
+                  title={against ? 'Turn Observed off to show arrival time or maximum depth' : undefined}
+                  className="flex gap-0.5"
+                >
+                  {(Object.keys(PRODUCT_LABEL) as TemporalProduct[]).map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      role="radio"
+                      aria-checked={shownProduct === p}
+                      disabled={Boolean(against) && p !== 'depth'}
+                      onClick={() => setProduct(p)}
+                      title={PRODUCT_TITLE[p]}
+                      className={`flex-1 rounded px-2 py-1 font-medium whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
+                        shownProduct === p ? 'bg-gauge text-basalt' : 'text-mist hover:bg-basalt-raised disabled:hover:bg-transparent'
+                      }`}
+                    >
+                      {PRODUCT_LABEL[p]}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="flex items-center gap-2 px-1">
+                <label className="flex items-center gap-1.5 text-mist-muted">
+                  Opacity
+                  <input
+                    type="range"
+                    min={0.2}
+                    max={1}
+                    step={0.05}
+                    value={opacity}
+                    onChange={(e) => changeOpacity(Number(e.target.value))}
+                    aria-valuetext={`${Math.round(opacity * 100)}%`}
+                    className="range w-20"
+                    style={{ '--fill': `${((opacity - 0.2) / 0.8) * 100}%` } as CSSProperties}
+                  />
+                </label>
+                <span className="ml-auto flex gap-0.5" role="group" aria-label="Export">
+                  <button
+                    type="button"
+                    onClick={() => void exportPng()}
+                    disabled={!shown || exporting}
+                    title="Save the map as shown, with its legend, as a PNG"
+                    className="rounded px-1.5 py-0.5 font-medium text-mist transition-colors hover:bg-basalt-raised disabled:cursor-not-allowed disabled:opacity-35"
+                  >
+                    {exporting ? 'Saving…' : 'PNG'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={exportGeoJson}
+                    disabled={!shown}
+                    title="Save the flooded extent on the map as GeoJSON polygons (WGS84)"
+                    className="rounded px-1.5 py-0.5 font-medium text-mist transition-colors hover:bg-basalt-raised disabled:cursor-not-allowed disabled:opacity-35"
+                  >
+                    GeoJSON
+                  </button>
+                </span>
+              </div>
+            </div>
+          )}
+          <div
+            role="radiogroup"
+            aria-label="Basemap"
+            className="flex gap-0.5 rounded-md bg-basalt/95 p-0.5 shadow-lg backdrop-blur-sm"
+          >
+            {Object.values(BASEMAPS).map(({ id, label }) => (
+              <button
+                key={id}
+                type="button"
+                role="radio"
+                aria-checked={basemapId === id}
+                onClick={() => selectBasemap(id)}
+                className={`rounded px-2 py-1 font-medium transition-colors ${
+                  basemapId === id ? 'bg-mist text-basalt' : 'text-mist hover:bg-basalt-raised'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
-        {/* On the right, under the view and layer controls and above the basemap picker: the left side holds the
-            legend column, which grows upward. The wrapper lets the card scroll on a short screen without blocking
-            the map around it. */}
+        {/* On the right, under the view and layer controls and above the basemap picker (and the overlay controls
+            over it, when shown): the left side holds the legend column, which grows upward. The wrapper lets the
+            card scroll on a short screen without blocking the map around it. */}
         {selected && (
-          <div className="pointer-events-none absolute top-36 right-3 bottom-18 z-1000 flex flex-col items-end">
+          <div
+            className={`pointer-events-none absolute top-36 right-3 z-1000 flex flex-col items-end ${
+              overlayControls ? 'bottom-40' : 'bottom-18'
+            }`}
+          >
             <div className="pointer-events-auto min-h-0">
               <CellInspector
                 cell={selected}
@@ -456,6 +740,15 @@ export function FloodMap({
               Fast mode: one steady frame at the peak. It does not follow the timeline.
             </div>
           )}
+        </div>
+      )}
+
+      {exportNotice && (
+        <div
+          role="status"
+          className="pointer-events-none absolute bottom-24 left-1/2 z-1000 max-w-[90%] -translate-x-1/2 rounded border-l-2 border-gauge bg-basalt/95 px-3 py-1.5 text-xs font-medium text-mist shadow-lg"
+        >
+          {exportNotice}
         </div>
       )}
 
@@ -539,9 +832,9 @@ export function FloodMap({
               <div className="rounded bg-basalt/85 px-2 py-0.5 text-mist-muted shadow-lg">
                 {shown === 'fast'
                   ? 'Fast mode: steady peak extent'
-                  : layers.temporal?.neighborhood === 'von_neumann'
-                    ? 'Temporal CA depth, von Neumann (not validated)'
-                    : 'Temporal CA depth'}
+                  : `${PRODUCT_CAPTION[shownProduct]}${
+                      layers.temporal?.neighborhood === 'von_neumann' ? ', von Neumann (not validated)' : ''
+                    }`}
               </div>
             )
           )}

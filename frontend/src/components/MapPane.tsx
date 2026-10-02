@@ -33,6 +33,8 @@ interface MapPaneProps {
   inputImage?: { url: string; bounds: Bounds; opacity: number } | null
   /** The inspected cell and its neighbors, outlined; null outlines nothing. */
   highlight?: { cell: CellRect; neighbors: CellRect[] } | null
+  /** Opacity of the flood overlay. */
+  opacity?: number
 }
 
 // Above the flood overlay (overlayPane, z 400) and below Leaflet's markers/popups, so the seed marker and the
@@ -88,10 +90,13 @@ export function MapPane({
   crosshair = false,
   inputImage = null,
   highlight = null,
+  opacity = OVERLAY_OPACITY,
 }: MapPaneProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<L.Map | null>(null)
   const overlayRef = useRef<L.ImageOverlay | null>(null)
+  // The opacity a new overlay is created with; the effect below keeps the current one in step.
+  const opacityRef = useRef(opacity)
   const inputOverlayRef = useRef<L.ImageOverlay | null>(null)
   const highlightRef = useRef<L.LayerGroup | null>(null)
   const outlineRef = useRef<L.LayerGroup | null>(null)
@@ -250,6 +255,11 @@ export function MapPane({
   }, [bounds])
 
   useEffect(() => {
+    opacityRef.current = opacity
+    overlayRef.current?.setOpacity(opacity)
+  }, [opacity])
+
+  useEffect(() => {
     const map = mapRef.current
     if (!map) return
     if (!imageUrl || !bounds) {
@@ -261,7 +271,7 @@ export function MapPane({
       // Pixelated: each image pixel is one grid cell, and the browser's default smoothing would
       // blend neighboring depth bands into colors that belong to neither.
       overlayRef.current = L.imageOverlay(imageUrl, toLatLngBounds(bounds), {
-        opacity: OVERLAY_OPACITY,
+        opacity: opacityRef.current,
         className: '[image-rendering:pixelated]',
       }).addTo(map)
     } else {
