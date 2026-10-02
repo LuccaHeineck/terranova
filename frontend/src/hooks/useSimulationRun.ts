@@ -6,6 +6,8 @@ import { toCompactFrame } from '../rendering/depthGrid'
 import type { CompactFrame } from '../rendering/depthGrid'
 import { appendFrame, createFrameBuffer } from '../rendering/frameBuffer'
 import type { FrameBuffer } from '../rendering/frameBuffer'
+import { recordFirstWet } from '../rendering/firstWet'
+import type { FirstWetGrid } from '../rendering/firstWet'
 import { NEIGHBORHOOD_LABEL } from '../types/simulation'
 import type { Bounds, Neighborhood, Resolution, RunMode, SimulationFrame, SimulationParams } from '../types/simulation'
 
@@ -26,6 +28,8 @@ export interface ResultLayer {
    * the layer, so the stale-state rules below apply to it unchanged, and a stopped run stays scrubbable.
    */
   history: FrameBuffer | null
+  /** Temporal runs only: when each cell first got wet, over every received frame (not just the buffered ones). */
+  firstWet: FirstWetGrid | null
   /** From submitting the run to its latest frame, or to done/stop. */
   wallClockSeconds: number
   finished: boolean
@@ -65,7 +69,7 @@ function logLine(mode: RunMode, frame: SimulationFrame): string {
 
 /** A layer for a run that has started (or, in a replay, is queued) but has no frame yet. */
 function pendingLayer(mode: RunMode, resolution: Resolution, neighborhood: Neighborhood): ResultLayer {
-  return { mode, resolution, neighborhood, frame: null, history: null, wallClockSeconds: 0, finished: false }
+  return { mode, resolution, neighborhood, frame: null, history: null, firstWet: null, wallClockSeconds: 0, finished: false }
 }
 
 /** A temporal run's neighborhood as sent (the backend's default is Moore); fast runs are Moore-only. */
@@ -180,13 +184,15 @@ export function useSimulationRun() {
             setLayers((prev) => {
               const layer = prev[engine]
               if (!layer) return prev
-              const history =
-                engine === 'temporal'
-                  ? appendFrame(layer.history ?? createFrameBuffer(compact.depth), compact)
-                  : null
+              const temporal = engine === 'temporal'
+              const history = temporal ? appendFrame(layer.history ?? createFrameBuffer(compact.depth), compact) : null
+              // Seeded-pool runs have no real time, so their cells are stamped with the engine step instead.
+              const firstWet = temporal
+                ? recordFirstWet(layer.firstWet, compact, mode === 'gauge_driven' ? 'seconds' : 'step')
+                : null
               return {
                 ...prev,
-                [engine]: { ...layer, frame: compact, history, wallClockSeconds },
+                [engine]: { ...layer, frame: compact, history, firstWet, wallClockSeconds },
               }
             })
             // Capped at MAX_LOG_LINES: a gauge-driven run emits tens of thousands of

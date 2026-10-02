@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import L from 'leaflet'
 import type { Bounds, LatLon } from '../types/simulation'
 import { OVERLAY_OPACITY } from '../rendering/depthToImage'
+import type { CellRect } from '../geo/cell'
 import { HILLSHADE } from '../geo/basemaps'
 import type { Basemap, TileSpec } from '../geo/basemaps'
 
@@ -24,8 +25,14 @@ interface MapPaneProps {
   footprint?: readonly [number, number][] | null
   /** The seed marker; null draws none. */
   seedMarker?: LatLon | null
-  /** Map clicks while a seed can be placed; null leaves clicks to plain panning. */
+  /** Map clicks (placing a seed, inspecting a cell); null leaves clicks to plain panning. */
   onMapClick?: ((point: LatLon) => void) | null
+  /** Show a crosshair cursor: a click places something (the seed), not just inspects. */
+  crosshair?: boolean
+  /** A model-input layer (terrain or roughness) drawn under the flood overlay; null draws none. */
+  inputImage?: { url: string; bounds: Bounds; opacity: number } | null
+  /** The inspected cell and its neighbors, outlined; null outlines nothing. */
+  highlight?: { cell: CellRect; neighbors: CellRect[] } | null
 }
 
 // Above the flood overlay (overlayPane, z 400) and below Leaflet's markers/popups, so the seed marker and the
@@ -38,6 +45,11 @@ const SEED_PANE_Z_INDEX = '450'
 // it shades almost white and barely changes there.
 const RELIEF_PANE = 'relief'
 const RELIEF_PANE_Z_INDEX = '250'
+
+// Between the relief (250) and the flood overlay (400): a model-input layer covers the basemap, and the flood
+// is drawn over it, so where the water sits and what it sits on read together.
+const INPUTS_PANE = 'inputs'
+const INPUTS_PANE_Z_INDEX = '300'
 
 // Place names above the flood overlay, so they stay readable through it, and below the seed pane.
 const LABELS_PANE = 'labels'
@@ -73,10 +85,15 @@ export function MapPane({
   footprint = null,
   seedMarker = null,
   onMapClick = null,
+  crosshair = false,
+  inputImage = null,
+  highlight = null,
 }: MapPaneProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<L.Map | null>(null)
   const overlayRef = useRef<L.ImageOverlay | null>(null)
+  const inputOverlayRef = useRef<L.ImageOverlay | null>(null)
+  const highlightRef = useRef<L.LayerGroup | null>(null)
   const outlineRef = useRef<L.LayerGroup | null>(null)
   const markerRef = useRef<L.CircleMarker | null>(null)
   const basemapLayersRef = useRef<L.TileLayer[]>([])
@@ -103,6 +120,9 @@ export function MapPane({
     const labelsPane = map.createPane(LABELS_PANE)
     labelsPane.style.zIndex = LABELS_PANE_Z_INDEX
     labelsPane.style.pointerEvents = 'none'
+    const inputsPane = map.createPane(INPUTS_PANE)
+    inputsPane.style.zIndex = INPUTS_PANE_Z_INDEX
+    inputsPane.style.pointerEvents = 'none'
     map.createPane(SEED_PANE).style.zIndex = SEED_PANE_Z_INDEX
     map.on('click', (event: L.LeafletMouseEvent) => {
       onMapClickRef.current?.({ lat: event.latlng.lat, lon: event.latlng.lng })
@@ -120,6 +140,8 @@ export function MapPane({
       map.remove()
       mapRef.current = null
       overlayRef.current = null
+      inputOverlayRef.current = null
+      highlightRef.current = null
       outlineRef.current = null
       markerRef.current = null
       basemapLayersRef.current = []
@@ -137,11 +159,48 @@ export function MapPane({
     basemapLayersRef.current = layers
   }, [basemap])
 
-  // A crosshair says the map takes a click; Leaflet's own grab cursor otherwise.
+  // A crosshair says a click places the seed; Leaflet's own grab cursor otherwise (a click there only inspects).
   useEffect(() => {
     const container = containerRef.current
-    if (container) container.style.cursor = onMapClick ? 'crosshair' : ''
-  }, [onMapClick])
+    if (container) container.style.cursor = crosshair ? 'crosshair' : ''
+  }, [crosshair])
+
+  useEffect(() => {
+    const map = mapRef.current
+    highlightRef.current?.remove()
+    highlightRef.current = null
+    if (!map || !highlight) return
+    const style = { pane: SEED_PANE, fill: false, interactive: false }
+    // The neighbors faint, the cell itself strong, each over a pale halo like the grid outline.
+    highlightRef.current = L.layerGroup([
+      ...highlight.neighbors.map((rect) => L.rectangle(rect, { ...style, color: '#ffffff', weight: 1, opacity: 0.9 })),
+      ...highlight.neighbors.map((rect) => L.rectangle(rect, { ...style, color: '#111827', weight: 1, dashArray: '2 2' })),
+      L.rectangle(highlight.cell, { ...style, color: '#ffffff', weight: 4, opacity: 0.85 }),
+      L.rectangle(highlight.cell, { ...style, color: '#e9c23a', weight: 2 }),
+    ]).addTo(map)
+  }, [highlight])
+
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    if (!inputImage) {
+      inputOverlayRef.current?.remove()
+      inputOverlayRef.current = null
+      return
+    }
+    const latLngBounds = toLatLngBounds(inputImage.bounds)
+    if (!inputOverlayRef.current) {
+      inputOverlayRef.current = L.imageOverlay(inputImage.url, latLngBounds, {
+        pane: INPUTS_PANE,
+        opacity: inputImage.opacity,
+        className: '[image-rendering:pixelated]',
+      }).addTo(map)
+    } else {
+      inputOverlayRef.current.setOpacity(inputImage.opacity)
+      inputOverlayRef.current.setBounds(latLngBounds)
+      inputOverlayRef.current.setUrl(inputImage.url)
+    }
+  }, [inputImage])
 
   useEffect(() => {
     const map = mapRef.current

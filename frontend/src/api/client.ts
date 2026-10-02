@@ -1,5 +1,5 @@
 import { API_BASE_URL } from './config'
-import type { GridInfo, ObservedExtent, SimulationCreated, SimulationParams } from '../types/simulation'
+import type { GridInfo, GridInputs, ObservedExtent, Resolution, SimulationCreated, SimulationParams } from '../types/simulation'
 
 export async function createSimulation(params: SimulationParams): Promise<SimulationCreated> {
   const response = await fetch(`${API_BASE_URL}/simulations`, {
@@ -35,5 +35,11 @@ export class HttpError extends Error {
 export async function fetchObservedExtent(): Promise<ObservedExtent> {
   const response = await fetch(`${API_BASE_URL}/validation/may2024`)
   if (!response.ok) throw new HttpError(`GET /validation/may2024 failed (${response.status})`, response.status)
+  return response.json()
+}
+
+export async function fetchGridInputs(resolution: Resolution): Promise<GridInputs> {
+  const response = await fetch(`${API_BASE_URL}/grids/${resolution}/inputs`)
+  if (!response.ok) throw new HttpError(`GET /grids/${resolution}/inputs failed (${response.status})`, response.status)
   return response.json()
 }

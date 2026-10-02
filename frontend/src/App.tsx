@@ -106,6 +106,7 @@ export default function App() {
             footprint={footprint}
             seedMarker={setup.seeding ? setup.seed : null}
             onMapClick={onMapClick}
+            mapGrid={grids?.[mapResolution] ?? null}
             seedNotice={setup.seeding ? setup.seedNotice : null}
             observed={observedOnMap}
           />

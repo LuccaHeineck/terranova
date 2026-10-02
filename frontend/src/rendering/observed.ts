@@ -1,6 +1,7 @@
 import type { ObservedExtent, Resolution } from '../types/simulation'
 import type { DepthGrid } from './depthGrid'
 import { isWet } from './depthToImage'
+import { hexToRgba as rgba, paint } from './paint'
 
 /**
  * The observed May 2024 extent as the client keeps it: one byte per cell, row-major like a frame's depth grid.
@@ -111,32 +112,12 @@ export const AGREEMENT_COLORS = {
 /** The observed extent drawn on its own, before any run. */
 export const OBSERVED_COLOR = '#6d28d9'
 
-type Rgba = [number, number, number, number]
-
-function rgba(hex: string, alpha = 255): Rgba {
-  return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16), alpha]
-}
-
 const HIT = rgba(AGREEMENT_COLORS.hit)
 const MISSED = rgba(AGREEMENT_COLORS.missed)
 const FALSE_ALARM = rgba(AGREEMENT_COLORS.falseAlarm)
 // Lighter than the scored classes: the model floods it, but the reference never modeled it.
 const NOT_SCORED = rgba(AGREEMENT_COLORS.notScored, 170)
 const OBSERVED = rgba(OBSERVED_COLOR)
-
-function paint(rows: number, cols: number, colorOf: (cell: number) => Rgba | null): string {
-  const canvas = document.createElement('canvas')
-  canvas.width = cols
-  canvas.height = rows
-  const ctx = canvas.getContext('2d')!
-  const image = ctx.createImageData(cols, rows)
-  for (let cell = 0; cell < rows * cols; cell++) {
-    const color = colorOf(cell)
-    if (color) image.data.set(color, cell * 4)
-  }
-  ctx.putImageData(image, 0, 0)
-  return canvas.toDataURL()
-}
 
 /**
  * A simulated extent against the observed one, cell by cell: hit, missed, false alarm, and - where the

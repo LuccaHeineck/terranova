@@ -108,3 +108,24 @@ export interface ObservedExtent {
   /** Row-major flat indices left out of scoring by the Estrela coverage-gap correction. */
   excluded_cells: number[]
 }
+
+/** One MapBiomas land-cover class present on a grid, with the Manning's n the engine looks it up as. */
+export interface LandcoverClass {
+  id: number
+  name: string
+  manning_n: number
+}
+
+/** GET /grids/{resolution}/inputs: the static rasters the engine runs on, for drawing and inspecting them. */
+export interface GridInputs {
+  resolution: Resolution
+  grid_shape: [number, number]
+  /** Cell size, m. */
+  dx: number
+  /** Row-major terrain elevation Z, m (rounded to the centimetre). */
+  elevation: number[]
+  /** Row-major MapBiomas class ID per cell. */
+  landcover: number[]
+  /** The classes present, ascending by id. */
+  classes: LandcoverClass[]
+}
