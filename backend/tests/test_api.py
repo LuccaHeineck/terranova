@@ -580,3 +580,24 @@ def test_observed_may2024_is_503_when_not_loaded():
         del app.dependency_overrides[get_validation_reference]
 
     assert response.status_code == 503
+
+
+def test_hydrograph_serves_the_loaded_record():
+    response = client.get("/hydrograph")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["elapsed_seconds"] == [0.0, 10.0]
+    assert body["discharge_m3s"] == [1.0, 1.0]
+    assert body["peak_discharge_m3s"] == 1.0
+    assert body["station_code"] == "86879300"
+
+
+def test_hydrograph_is_503_when_not_loaded():
+    app.dependency_overrides[get_hydrograph] = lambda: None
+    try:
+        response = client.get("/hydrograph")
+    finally:
+        app.dependency_overrides[get_hydrograph] = lambda: TEST_HYDROGRAPH
+
+    assert response.status_code == 503
