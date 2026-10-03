@@ -15,6 +15,7 @@ api/
     health.py         # GET /health -> {"status": "ok"}
     simulations.py     # POST /simulations, WS /simulations/{run_id}/stream
     validation.py      # GET /validation/may2024 -> observed May 2024 extent + coverage-gap cells (90m)
+    hydrograph.py      # GET /hydrograph -> the May 2024 discharge record driving gauge-driven/fast runs
 ```
 
 ## Run locally

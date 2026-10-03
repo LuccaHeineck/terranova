@@ -1,12 +1,15 @@
 import { DEPTH_BANDS, FLOODED_DEPTH_THRESHOLD_M, OVERLAY_OPACITY } from '../rendering/depthToImage'
 
-/** Depth -> color key for the flood overlay as one stepped scale, read from the same DEPTH_BANDS the rasterizer uses. */
-export function DepthLegend() {
+/**
+ * Depth -> color key for the flood overlay as one stepped scale, read from the same DEPTH_BANDS the rasterizer
+ * uses. The maximum-depth envelope shares the scale, under its own title and note.
+ */
+export function DepthLegend({ title = 'Water depth', note }: { title?: string; note?: string }) {
   const last = DEPTH_BANDS[DEPTH_BANDS.length - 1]
   return (
     <div className="float-card w-60 rounded-xl px-3 py-2.5 text-xs text-ink">
       <div className="mb-2 flex items-baseline justify-between">
-        <span className="text-[13px] font-semibold">Water depth</span>
+        <span className="text-[13px] font-semibold">{title}</span>
         <span className="text-ink-muted">metres</span>
       </div>
       {/* On a white backing, so the swatches show the colors as composited over the light map. */}
@@ -22,7 +25,9 @@ export function DepthLegend() {
           </span>
         ))}
       </div>
-      <div className="mt-1 text-[10.5px] text-ink-muted">Dry below {FLOODED_DEPTH_THRESHOLD_M} m</div>
+      <div className="mt-1 text-[10.5px] text-ink-muted">
+        Dry below {FLOODED_DEPTH_THRESHOLD_M} m{note ? `. ${note}` : ''}
+      </div>
     </div>
   )
 }

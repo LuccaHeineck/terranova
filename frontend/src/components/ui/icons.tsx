@@ -156,3 +156,11 @@ export const IconCheck = (props: SVGProps<SVGSVGElement>) => (
     <path d="M4.5 10.5l3.5 3.5 7.5-8" />
   </Icon>
 )
+
+/** Export: an arrow into a tray. */
+export const IconDownload = (props: SVGProps<SVGSVGElement>) => (
+  <Icon {...props}>
+    <path d="M10 3.5v9M6.5 9l3.5 3.5L13.5 9" />
+    <path d="M4 13.5v2a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-2" />
+  </Icon>
+)

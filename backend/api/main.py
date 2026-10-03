@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api import state
-from api.routers import health, simulations, validation
+from api.routers import health, hydrograph, simulations, validation
 from config import settings
 from config.settings import CORS_ALLOWED_ORIGINS, HYDROGRAPH_INFLOW_EDGE, HYDROGRAPH_OUTLET_EDGE
 from ingestion.dem import build_elevation_matrix, get_geographic_bounds, get_georeference
@@ -100,3 +100,4 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(simulations.router)
 app.include_router(validation.router)
+app.include_router(hydrograph.router)

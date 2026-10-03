@@ -1317,6 +1317,37 @@ frontend, so the validation is visible in the demo rather than only in `examples
   width and roughness responses, and two input validations. The May 2024 regression pins both rules, now
   including gap-corrected counts. Suite: 173/173.
 
+**Flood-map products, export and the gauge hydrograph.** Frontend, plus one read-only endpoint. No engine or
+model change.
+- **Arrival-time map:** a "Temporal layer" control (Depth / Arrival / Max depth) on the map.
+  - `useSimulationRun` stamps each cell's first-wet time as frames arrive (`rendering/firstWet.ts`), so the
+    timeline buffer's thinning never coarsens it. The time is exact to one frame interval.
+  - Cells are drawn up to the timeline's selected time, so scrubbing replays the spread.
+  - Six equal bands of whole hours (whole days on a multi-day run), or engine steps for a seeded pool.
+  - The ramp is one magenta hue, darkest for the first water. It was validated as an ordinal ramp with the
+    dataviz skill's script against OSM land and water.
+- **Maximum-depth layer:** the deepest water per cell over every received frame (`rendering/maxDepth.ts`),
+  drawn on the depth bands. The gauge-driven step-1 inflow spike keeps the inflow cells in the top band.
+- **Gauge hydrograph in Results:** `GET /hydrograph` serves the loaded record: elapsed seconds, discharge and
+  the peak; 503 when not loaded. The chart (`components/HydrographChart.tsx`, inline SVG) marks the timeline's
+  `t` in gauge yellow. It shows while a gauge-driven or fast run is on the map.
+- **Overlay opacity** slider, remembered per browser.
+- **Export:**
+  - **PNG** (`rendering/mapSnapshot.ts`): the visible panes, with tiles re-fetched cross-origin, the relief
+    blend, overlay and outline, then each pane's title and legend and the tile attribution, at 2× scale.
+  - **GeoJSON** (`geo/extentGeoJson.ts`): the flooded extent of each shown pane, traced into MultiPolygons
+    with holes. It is placed through the grid's true footprint (bilinear between its corners), not the
+    overlay's axis-aligned envelope.
+- **Known gap:** on a narrow map in Compare, the bottom-right controls cover part of the fast pane's legend
+  (the basemap picker already did, a little). It belongs with the open narrow-screen Compare fix below.
+- **Checked in a browser** (headless Chrome, a 90m gauge-driven run stopped at t = 16.8 h, plus fast, in
+  Compare): every layer, the opacity slider and both exports work, with no page errors.
+  - The GeoJSON is valid in shapely, with counter-clockwise exteriors. Its area is ~426 cells against 427
+    flooded.
+  - The PNG kept every basemap tile.
+- **Tests:** `test_api.py` covers `GET /hydrograph` and its 503. Suite: 175/175. The frontend still has no
+  tests.
+
 To run the CA-engine PoC directly (bare-metal, unrelated to Docker): `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 
 To run the real end-to-end CSI validation against the May 2024 event (bare-metal, expect ~30 minutes):
@@ -1407,19 +1438,25 @@ frontend/
     presets.ts                 # MAY_2024_REPLAY (the validated 90m fast + temporal-to-peak scenario), DEFAULT_OUTFLOW_FRACTION
     api/
       config.ts                 # API_BASE_URL / WS_BASE_URL (VITE_API_BASE_URL, default localhost:8000)
-      client.ts                  # createSimulation() -> POST /simulations, fetchGrids() -> GET /grids
+      client.ts                  # createSimulation() -> POST /simulations, fetchGrids() -> GET /grids, fetchObservedExtent(), fetchHydrograph()
       stream.ts                   # openSimulationStream() -> WebSocket wrapper (handles code 4004, disconnects)
     hooks/
       useSimulationRun.ts          # orchestration: idle -> starting -> streaming -> done|stopped|error, per-engine result layers (+ temporal frame buffer), May 2024 replay chain
       useTimeline.ts               # which buffered temporal frame is shown: follow live / paused at a step / 8 fps replay
+      useHydrograph.ts             # GET /hydrograph once (retrying while the API is unreachable)
       useRunSetup.ts               # engine / scenario / grid + seed marker, shared by ConfigPanel and the map; clears the marker on grid/mode change
       useGrids.ts                  # GET /grids once (retrying): each grid's shape, envelope and true footprint, before any run
     geo/
       footprint.ts                 # point-in-polygon against a grid footprint
+      extentGeoJson.ts             # flooded mask -> traced MultiPolygons with holes -> GeoJSON through the grid footprint
     rendering/
       depthToImage.ts               # temporal: DEPTH_BANDS (fixed 6-band blue depth scale); fast: one flat extent color -> canvas data URL; flooded-cell and agreement counts (flat Float32Array grids)
       depthGrid.ts                  # DepthGrid (Float32Array in a private field) + CompactFrame; wire frame -> compact on arrival
       frameBuffer.ts                # bounded FrameBuffer of CompactFrames (32 MiB budget, stride-doubling decimation)
+      firstWet.ts / maxDepth.ts     # per-cell first-wet time and depth envelope, recorded over every received frame
+      arrivalTime.ts                # arrival-time bands (one magenta ramp) -> canvas data URL
+      paint.ts                      # one-pixel-per-cell rasterizer shared by the overlays
+      mapSnapshot.ts / legendSpecs.ts # PNG export: Leaflet DOM layers -> canvas, plus the legends as data
     components/
       ConfigPanel.tsx                # "Replay May 2024 flood" preset; engine toggle (temporal/fast), grid, scenario + steps/seed volume/seed location/frame_interval/outflow_fraction, Stop
       FloodMap.tsx                    # Temporal/Fast/Compare view selector; Compare = two synced MapPanes side by side, each with its own legend
@@ -1428,6 +1465,8 @@ frontend/
       ExtentLegend.tsx                  # fast pane key: one flooded color, "extent only, depth not calibrated"
       LogPanel.tsx                     # status/grid_shape/bounds, temporal-vs-fast comparison block (at the timeline's frame), scrolling log, errors
       Timeline.tsx                     # scrubber under the temporal pane: slider, play/pause, jump to live, per-frame readout (t, flooded, volume balance)
+      HydrographChart.tsx              # Results: May 2024 discharge record (inline SVG) with the timeline's t marked
+      ArrivalLegend.tsx                # arrival-time bands key
 ```
 
 `data/raw/` and `data/processed/` now hold real (gitignored) files once `download_dem.py`/
@@ -1522,14 +1561,12 @@ None touch the documented engine; the ones needing data the frontend doesn't hav
   the CA sees, rather than Esri's), and a Manning roughness / land-cover layer. Needs small backend endpoints.
 - **Click-a-cell inspector**: depth, elevation `Z`, Manning `n` and first-wet time for the clicked cell, from
   the frame buffer plus the grid's static rasters.
-- **Arrival-time map**: color each cell by the hour it first flooded, computed client-side from the temporal
-  frame buffer (a standard flood-risk product).
-- **Maximum-depth envelope**: deepest water each cell reached during the run, also from the frame buffer.
-- **Gauge hydrograph chart** in Results: the real May 2024 discharge record with a marker at the timeline's
-  current `t`. Needs the hydrograph exposed through the API.
-- **Overlay opacity slider** and **smoother frame-to-frame transitions** (the latter already listed above).
-- **Timeline playback speed** (1x/4x/16x) — full 90 m replays take several minutes.
-- **Export**: the map as PNG for the thesis document, the flooded extent as GeoJSON.
-- **Narrow-screen Compare fix**: below ~900 px the map-view switcher covers the right pane's label.
+- ~~**Arrival-time map**~~, ~~**maximum-depth envelope**~~, ~~**gauge hydrograph chart**~~, ~~**overlay
+  opacity slider**~~ and ~~**export** (PNG, GeoJSON)~~ *(done — see "Flood-map products, export and the gauge
+  hydrograph" in Current status)*.
+- **Smoother frame-to-frame transitions** (already listed above).
+- **Timeline playback speed** (1x/4x/16x) for replaying the buffered frames; a live run stays compute-bound.
+- **Narrow-screen Compare fix**: below ~900 px the map-view switcher covers the right pane's label, and the
+  bottom-right controls cover the fast pane's legend.
 - **Playwright smoke tests** (`npm run test:e2e`) for Setup, Replay, Stop, seeding and the basemap picker —
   the frontend has no tests yet.

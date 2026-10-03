@@ -129,3 +129,13 @@ export interface GridInputs {
   /** The classes present, ascending by id. */
   classes: LandcoverClass[]
 }
+
+/** GET /hydrograph: the real May 2024 discharge record that drives gauge-driven and fast runs. */
+export interface HydrographRecord {
+  station_code: string
+  /** Seconds since the record's first reading: the time axis of a gauge-driven run's `elapsed_time`. */
+  elapsed_seconds: number[]
+  discharge_m3s: number[]
+  peak_elapsed_seconds: number
+  peak_discharge_m3s: number
+}

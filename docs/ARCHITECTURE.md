@@ -122,7 +122,8 @@ validation grid, chosen per run with `resolution`) plus the best-effort hydrogra
 startup via a `lifespan`, not per-request, and exposed as FastAPI dependencies (`get_grids`,
 `get_hydrograph`) rather than read directly off `app.state` so tests can swap in small synthetic arrays via
 `app.dependency_overrides`. Serves the real Lajeado/Estrela grid only — no synthetic-grid option, since
-`api/` may never import `examples/`. `GET /validation/may2024` (`routers/validation.py`) serves the observed
+`api/` may never import `examples/`. `GET /hydrograph` (`routers/hydrograph.py`) serves the loaded May 2024
+discharge record for charting. `GET /validation/may2024` (`routers/validation.py`) serves the observed
 SGB/CPRM May 2024 peak extent and the Estrela coverage-gap exclusion (`docs/tcc-deviations.md` §16.2) on the
 90m validation grid, as row-major cell indices; both are built offline at startup by
 `ingestion.flood_extent.build_validation_reference` from the raw stage layers
@@ -275,6 +276,12 @@ each real-event run (gauge-driven or fast; never a synthetic seeded pool) live: 
 false-alarm rate and naive CSI, from `rendering/observed.ts`, a client-side mirror of
 `validation/metrics.py`'s confusion counts with the same 0.01 m wet-cell cutoff. The simulated grid's dashed outline is always drawn, to show how far the
 simulation reaches: the selected grid while a seed is being placed, otherwise the grid of the result on the map.
+
+The temporal pane can also draw two products derived from frames the client already has, recorded over every
+received frame rather than from the thinned timeline buffer: an arrival-time map (`rendering/firstWet.ts`,
+`rendering/arrivalTime.ts`) and the maximum-depth envelope (`rendering/maxDepth.ts`). The map exports a PNG
+(`rendering/mapSnapshot.ts`, composited from Leaflet's own DOM layers) or the flooded extent as GeoJSON
+(`geo/extentGeoJson.ts`). The Results tab charts the gauge record from `GET /hydrograph`.
 
 What does NOT belong here: any backend logic. The frontend only ever calls `backend/api/`'s HTTP/WebSocket
 contract; it never imports Python code or reads `data/` directly.
