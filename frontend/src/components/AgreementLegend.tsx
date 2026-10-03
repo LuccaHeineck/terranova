@@ -20,8 +20,8 @@ const ROWS = [
 /** Key for a pane drawn against the observed May 2024 extent, or for the observed extent alone. */
 export function AgreementLegend({ mode, stageM }: { mode: 'agreement' | 'observed'; stageM: number }) {
   return (
-    <div className="max-w-60 rounded bg-basalt/95 px-3 py-2 text-xs text-mist shadow-lg">
-      <div className="mb-1.5 font-display text-[13px] font-semibold">
+    <div className="max-w-60 float-card rounded-xl px-3 py-2.5 text-xs text-ink">
+      <div className="mb-2 text-[13px] font-semibold">
         {mode === 'agreement' ? 'Against the observed flood' : 'Observed flood, May 2024'}
       </div>
       {mode === 'agreement' ? (
@@ -39,7 +39,7 @@ export function AgreementLegend({ mode, stageM }: { mode: 'agreement' | 'observe
           Flooded in the reference
         </div>
       )}
-      <div className="mt-1.5 text-mist-muted">
+      <div className="mt-1.5 text-[10.5px] leading-snug text-ink-muted">
         SGB/CPRM extent at the {stageM.toFixed(2)} m peak stage.
         {mode === 'agreement' && ' Estrela-side cells the reference never modeled are not scored.'}
       </div>

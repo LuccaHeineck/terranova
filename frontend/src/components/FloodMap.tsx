@@ -30,6 +30,8 @@ import { DepthLegend } from './DepthLegend'
 import { ExtentLegend } from './ExtentLegend'
 import { MapPane } from './MapPane'
 import { Timeline } from './Timeline'
+import { Popover, PopoverHeading } from './ui/Popover'
+import { IconLayers } from './ui/icons'
 
 type MapView = Engine | 'compare'
 
@@ -84,16 +86,18 @@ function resolveView(view: MapView, available: Record<MapView, boolean>): MapVie
 
 const BASEMAP_STORAGE_KEY = 'terranova.basemap'
 
-/** An on/off map layer, with a swatch of the colors it draws in (dimmed while off). */
+/** An on/off map layer in the Layers menu: a swatch of the colors it draws in, a one-line hint, and a switch. */
 function LayerToggle({
   label,
   title,
+  hint,
   swatch,
   on,
   onToggle,
 }: {
   label: string
   title: string
+  hint: string
   swatch: string
   on: boolean
   onToggle: () => void
@@ -101,19 +105,23 @@ function LayerToggle({
   return (
     <button
       type="button"
+      role="switch"
       onClick={onToggle}
-      aria-pressed={on}
+      aria-checked={on}
       title={title}
-      className={`flex items-center gap-1.5 rounded px-2.5 py-1 text-[13px] font-medium transition-colors ${
-        on ? 'bg-mist text-basalt' : 'text-mist hover:bg-basalt-raised'
-      }`}
+      className="flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-sunken"
     >
+      <span aria-hidden="true" className="h-4 w-6 shrink-0 rounded-[4px] ring-1 ring-line" style={{ background: swatch }} />
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="text-[13px] font-medium">{label}</span>
+        <span className="truncate text-[11px] text-ink-muted">{hint}</span>
+      </span>
       <span
         aria-hidden="true"
-        className={`inline-block h-2.5 w-3.5 rounded-sm ring-1 ${on ? 'ring-basalt/40' : 'opacity-60 ring-mist-muted/50'}`}
-        style={{ background: swatch }}
+        className={`relative h-4 w-7 shrink-0 rounded-full transition-colors after:absolute after:top-0.5 after:left-0.5 after:h-3 after:w-3 after:rounded-full after:bg-surface after:shadow-sm after:transition-transform ${
+          on ? 'bg-accent after:translate-x-3' : 'bg-line'
+        }`}
       />
-      {label}
     </button>
   )
 }
@@ -122,16 +130,18 @@ function LayerToggle({
 type InputLayer = 'off' | 'terrain' | 'roughness'
 
 /** The two input layers' toggles: one at a time, since both cover the whole grid. */
-const INPUT_LAYERS: { id: Exclude<InputLayer, 'off'>; label: string; title: string; swatch: string }[] = [
+const INPUT_LAYERS: { id: Exclude<InputLayer, 'off'>; label: string; title: string; hint: string; swatch: string }[] = [
   {
     id: 'terrain',
     label: 'Terrain',
+    hint: 'Model DEM, the terrain Z',
     title: "Model input: the model's own DEM, the terrain Z the automaton runs on",
     swatch: `linear-gradient(to right, ${TERRAIN_GRADIENT.join(', ')})`,
   },
   {
     id: 'roughness',
     label: 'Roughness',
+    hint: "Manning's n from land cover",
     title: "Model input: Manning's n from MapBiomas land cover, what slows the water",
     swatch: `linear-gradient(to right, ${ROUGHNESS_GRADIENT.join(', ')})`,
   },
@@ -375,11 +385,12 @@ export function FloodMap({
     <AgreementLegend mode="observed" stageM={against.stageM} />
   ) : null
   const { onPrimaryReady, onSecondaryReady } = useSyncedMaps(bounds)
+  const activeOverlays = (against ? 1 : 0) + (inputLayer !== 'off' && mapGrid ? 1 : 0)
 
   return (
     <div className="relative flex h-full w-full flex-col">
       {/* The primary pane stays mounted across view changes; Compare adds the fast pane beside it. */}
-      <div className={`relative grid min-h-0 w-full flex-1 ${compare ? 'grid-cols-2 gap-0.5 bg-basalt-line' : 'grid-cols-1'}`}>
+      <div className={`relative grid min-h-0 w-full flex-1 ${compare ? 'grid-cols-2 gap-px bg-line' : 'grid-cols-1'}`}>
         <MapPane
           bounds={bounds}
           imageUrl={observedUrl ?? (primary === 'fast' ? fastUrl : temporalUrl)}
@@ -401,38 +412,18 @@ export function FloodMap({
             bounds={bounds}
             imageUrl={fastUrl}
             label={paneLabel('fast', layers.fast?.frame ?? null)}
-            legend={legendFor('fast')}
+            // Against the observed extent both panes share one key, drawn once under the primary pane.
+            legend={against ? undefined : legendFor('fast')}
             fitOnMount={false}
             onMapReady={onSecondaryReady}
             {...paneProps}
           />
         )}
-        <div
-          role="radiogroup"
-          aria-label="Basemap"
-          className="absolute right-3 bottom-7 z-1000 flex gap-0.5 rounded-md bg-basalt/95 p-0.5 text-xs shadow-lg backdrop-blur-sm"
-        >
-          {Object.values(BASEMAPS).map(({ id, label }) => (
-            <button
-              key={id}
-              type="button"
-              role="radio"
-              aria-checked={basemapId === id}
-              onClick={() => selectBasemap(id)}
-              className={`rounded px-2 py-1 font-medium transition-colors ${
-                basemapId === id ? 'bg-mist text-basalt' : 'text-mist hover:bg-basalt-raised'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        {/* On the right, under the view and layer controls and above the basemap picker: the left side holds the
-            legend column, which grows upward. The wrapper lets the card scroll on a short screen without blocking
-            the map around it. */}
+        {/* On the right, under the Layers menu and above the zoom control: the left side holds the legend column,
+            which grows upward. The wrapper lets the card scroll on a short screen without blocking the map
+            around it. */}
         {selected && (
-          <div className="pointer-events-none absolute top-36 right-3 bottom-18 z-1000 flex flex-col items-end">
+          <div className="pointer-events-none absolute top-16 right-3 bottom-24 z-1000 flex flex-col items-end">
             <div className="pointer-events-auto min-h-0">
               <CellInspector
                 cell={selected}
@@ -449,10 +440,10 @@ export function FloodMap({
 
       {/* The timeline sits under the temporal pane only: the fast mode has a single frame to show. */}
       {showsTemporal && timeline.frame && (
-        <div className={`grid w-full ${compare ? 'grid-cols-2 gap-0.5 bg-basalt-line' : 'grid-cols-1'}`}>
+        <div className={`grid w-full ${compare ? 'grid-cols-2 gap-px bg-line' : 'grid-cols-1'}`}>
           <Timeline timeline={timeline} compare={compare} />
           {compare && (
-            <div className="flex items-center justify-center border-t border-basalt-line bg-basalt p-3 text-center text-xs text-mist-muted">
+            <div className="flex items-center justify-center border-t border-line bg-surface p-3 text-center text-xs text-ink-muted">
               Fast mode: one steady frame at the peak. It does not follow the timeline.
             </div>
           )}
@@ -462,94 +453,106 @@ export function FloodMap({
       {seedNotice && (
         <div
           role="status"
-          className="pointer-events-none absolute top-3 left-1/2 z-1000 -translate-x-1/2 rounded border-l-2 border-ochre bg-basalt/95 px-3 py-1.5 text-xs font-medium text-mist shadow-lg"
+          className="float-card pointer-events-none absolute top-16 left-1/2 z-1000 -translate-x-1/2 rounded-lg border-l-2 border-warn px-3 py-1.5 text-xs font-medium text-ink"
         >
           {seedNotice}
         </div>
       )}
 
-      {(available.temporal || available.fast || observed || mapGrid) && (
-        <div className="absolute top-3 right-3 z-1000 flex flex-col items-end gap-1.5 text-xs">
-          {(available.temporal || available.fast) && (
-            <div
-              role="group"
-              aria-label="Map view"
-              className="flex gap-0.5 rounded-md bg-basalt/95 p-0.5 shadow-lg backdrop-blur-sm"
-            >
-              {(Object.keys(VIEW_LABEL) as MapView[]).map((v) => (
-                <button
-                  key={v}
-                  type="button"
-                  disabled={!available[v]}
-                  onClick={() => setChoice({ view: v, runCount })}
-                  aria-pressed={shown === v}
-                  className={`rounded px-2.5 py-1 text-[13px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
-                    shown === v ? 'bg-gauge text-basalt' : 'text-mist hover:bg-basalt-raised disabled:hover:bg-transparent'
-                  }`}
-                >
-                  {VIEW_LABEL[v]}
-                </button>
-              ))}
+      {(available.temporal || available.fast) && (
+        <div className="absolute top-3 left-1/2 z-1000 flex -translate-x-1/2 flex-col items-center gap-1.5">
+          <div role="group" aria-label="Map view" className="float-card flex gap-0.5 rounded-xl p-1 text-[13px]">
+            {(Object.keys(VIEW_LABEL) as MapView[]).map((v) => (
+              <button
+                key={v}
+                type="button"
+                disabled={!available[v]}
+                onClick={() => setChoice({ view: v, runCount })}
+                aria-pressed={shown === v}
+                title={v === 'compare' ? 'Both engines side by side; pan or zoom either map and both follow' : undefined}
+                className={`rounded-lg px-3 py-1 font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
+                  shown === v ? 'bg-accent text-canvas' : 'text-ink hover:bg-sunken disabled:hover:bg-transparent'
+                }`}
+              >
+                {VIEW_LABEL[v]}
+              </button>
+            ))}
+          </div>
+          {showsTemporal && layers.temporal?.neighborhood === 'von_neumann' && (
+            <div className="float-card rounded-lg border-l-2 border-warn px-2.5 py-1 text-xs text-ink">
+              von Neumann neighborhood: not validated
             </div>
           )}
-          {/* Data drawn on the map, as on/off toggles with their colors - unlike the basemap picker (bottom right),
-              which only chooses the background. Terrain and roughness are model inputs, drawn under the flood. */}
-          {(observed || mapGrid) && (
-            <div
-              role="group"
-              aria-label="Map layers"
-              className="flex items-center gap-0.5 rounded-md bg-basalt/95 p-0.5 shadow-lg backdrop-blur-sm"
-            >
-              <span className="px-1.5 font-display text-[11px] font-semibold tracking-wide text-mist-muted uppercase">
-                Layers
-              </span>
-              {observed && (
-                <LayerToggle
-                  label="Observed"
-                  title="Draw the run against the observed May 2024 flood extent"
-                  swatch={OBSERVED_COLOR}
-                  on={observedOn}
-                  onToggle={() => setObservedOn((on) => !on)}
-                />
+        </div>
+      )}
+
+      {/* One menu for everything drawn under or over the result: the background, and the data layers as
+          on/off switches with their colors. Terrain and roughness are model inputs, drawn under the flood. */}
+      <div className="absolute top-3 right-3 z-1000">
+        <Popover
+          label="Map layers"
+          triggerClassName="float-card flex h-9 items-center gap-1.5 rounded-xl px-3 text-[13px] font-medium text-ink"
+          trigger={() => (
+            <>
+              <IconLayers className="h-[18px] w-[18px]" />
+              <span className="hidden sm:inline">Layers</span>
+              {activeOverlays > 0 && (
+                <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold text-canvas">
+                  {activeOverlays}
+                </span>
               )}
-              {mapGrid && (
-                <>
-                  {observed && <span aria-hidden="true" className="mx-0.5 h-5 w-px bg-basalt-line" />}
-                  {INPUT_LAYERS.map(({ id, label, title, swatch }) => (
+            </>
+          )}
+        >
+          <PopoverHeading>Basemap</PopoverHeading>
+          <div role="radiogroup" aria-label="Basemap" className="grid grid-cols-2 gap-1 px-1 pb-1">
+            {Object.values(BASEMAPS).map(({ id, label }) => (
+              <button
+                key={id}
+                type="button"
+                role="radio"
+                aria-checked={basemapId === id}
+                onClick={() => selectBasemap(id)}
+                className={`rounded-lg px-2 py-1.5 text-[13px] font-medium transition-colors ${
+                  basemapId === id ? 'bg-ink text-canvas' : 'bg-sunken text-ink hover:bg-line'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {(observed || mapGrid) && (
+            <>
+              <div className="mx-2 my-1 h-px bg-line" />
+              <PopoverHeading>Overlays</PopoverHeading>
+              <div role="group" aria-label="Map layers" className="flex flex-col">
+                {observed && (
+                  <LayerToggle
+                    label="Observed flood"
+                    title="Draw the run against the observed May 2024 flood extent"
+                    hint="May 2024 extent, scored against the run"
+                    swatch={OBSERVED_COLOR}
+                    on={observedOn}
+                    onToggle={() => setObservedOn((on) => !on)}
+                  />
+                )}
+                {mapGrid &&
+                  INPUT_LAYERS.map(({ id, label, title, hint, swatch }) => (
                     <LayerToggle
                       key={id}
                       label={label}
                       title={title}
+                      hint={hint}
                       swatch={swatch}
                       on={inputLayer === id}
                       onToggle={() => selectInputLayer(inputLayer === id ? 'off' : id)}
                     />
                   ))}
-                </>
-              )}
-            </div>
-          )}
-          {against ? (
-            <div className="rounded bg-basalt/85 px-2 py-0.5 text-mist-muted shadow-lg">
-              {shown ? 'Simulated vs. observed May 2024 extent' : 'Observed May 2024 extent'}
-            </div>
-          ) : (
-            shown &&
-            !compare && (
-              <div className="rounded bg-basalt/85 px-2 py-0.5 text-mist-muted shadow-lg">
-                {shown === 'fast'
-                  ? 'Fast mode: steady peak extent'
-                  : layers.temporal?.neighborhood === 'von_neumann'
-                    ? 'Temporal CA depth, von Neumann (not validated)'
-                    : 'Temporal CA depth'}
               </div>
-            )
+            </>
           )}
-          {compare && !against && (
-            <div className="rounded bg-basalt/85 px-2 py-0.5 text-mist-muted shadow-lg">Pan or zoom either map; both follow.</div>
-          )}
-        </div>
-      )}
+        </Popover>
+      </div>
     </div>
   )
 }

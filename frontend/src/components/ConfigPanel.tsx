@@ -71,6 +71,25 @@ const NEIGHBORHOOD_OPTIONS: readonly SegmentOption<Neighborhood>[] = [
   },
 ]
 
+/** Two faint river lines in the replay card's corner: decoration only. */
+function WaveMotif() {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 120 60"
+      className="pointer-events-none absolute -top-1 -right-2 h-16 w-32 text-accent opacity-25"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+    >
+      <path d="M2 20c12-8 22-8 34 0s22 8 34 0 22-8 34 0 14 6 14 6" />
+      <path d="M2 34c12-8 22-8 34 0s22 8 34 0 22-8 34 0 14 6 14 6" opacity="0.6" />
+      <path d="M2 48c12-8 22-8 34 0s22 8 34 0 22-8 34 0 14 6 14 6" opacity="0.3" />
+    </svg>
+  )
+}
+
 function formatNumber(value: number): string {
   return value.toLocaleString('en-US', { maximumFractionDigits: 1 })
 }
@@ -87,10 +106,10 @@ interface SeedLocationFieldProps {
 function SeedLocationField({ seed, resolution, error, busy, onClear }: SeedLocationFieldProps) {
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-[13px] font-medium text-mist">Seed location</span>
+      <span className="text-[13px] font-medium text-ink">Seed location</span>
       {seed ? (
-        <div className="flex items-center justify-between gap-2 rounded border border-basalt-line bg-basalt-raised py-1 pr-1 pl-2">
-          <span className="flex items-center gap-2 text-xs text-mist tabular-nums">
+        <div className="flex items-center justify-between gap-2 rounded-md border border-line bg-surface py-1 pr-1 pl-2">
+          <span className="flex items-center gap-2 text-xs text-ink tabular-nums">
             <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-[#e11d48] ring-2 ring-white" />
             {seed.lat.toFixed(5)}, {seed.lon.toFixed(5)}
           </span>
@@ -98,17 +117,17 @@ function SeedLocationField({ seed, resolution, error, busy, onClear }: SeedLocat
             type="button"
             onClick={onClear}
             disabled={busy}
-            className="rounded px-2 py-0.5 text-xs text-mist-muted hover:bg-basalt-line hover:text-mist disabled:opacity-50"
+            className="rounded px-2 py-0.5 text-xs text-ink-muted hover:bg-sunken hover:text-ink disabled:opacity-50"
           >
             Clear
           </button>
         </div>
       ) : (
-        <span className="rounded border border-dashed border-basalt-line px-2 py-1 text-xs text-mist-muted">
+        <span className="rounded-md border border-dashed border-line px-2 py-1 text-xs text-ink-muted">
           Lowest point of the terrain (default)
         </span>
       )}
-      <span className="text-xs leading-snug text-mist-muted">
+      <span className="text-xs leading-snug text-ink-muted">
         {error
           ? `Can't place a seed on the map yet: the grid outline didn't load (${error}). Retrying…`
           : seed
@@ -193,22 +212,31 @@ export function ConfigPanel({ status, setup, seedPlacementError, onStart, onRepl
 
   return (
     <form id={RUN_SETUP_FORM_ID} onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
-      <div className="relative flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pt-1 pb-4">
+      <div className="relative flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-4 pt-1 pb-5">
         {busy && <Callout tone="info">Settings are locked while a run is going. Stop it to change them.</Callout>}
 
-        <div className="flex flex-col gap-2 rounded-md border-l-2 border-gauge bg-basalt-raised p-3">
-          <span className="font-display text-[15px] font-semibold text-mist">May 2024 flood</span>
-          <p className="text-xs leading-snug text-mist-muted">
-            Validated scenario: 90 m grid, the fast engine and the temporal CA to the observed peak, side by side.
+        {/* The one-click way in: the validated real event, both engines side by side. */}
+        <div className="relative shrink-0 overflow-hidden rounded-xl bg-surface p-4 ring-1 ring-line">
+          <WaveMotif />
+          <span className="text-[11px] font-semibold tracking-wider text-accent uppercase">Validated scenario</span>
+          <h3 className="mt-0.5 font-serif text-[26px] leading-tight text-ink">May 2024 flood</h3>
+          <p className="mt-1 text-xs leading-snug text-ink-muted">
+            The 90 m grid, fast engine and temporal CA to the observed peak, side by side.
           </p>
           <button
             type="button"
             onClick={startReplay}
             disabled={busy}
-            className="self-start rounded border border-gauge px-3 py-1.5 text-[13px] font-medium text-gauge transition-colors hover:bg-gauge hover:text-basalt disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-gauge"
+            className="mt-3 w-full rounded-lg bg-ink px-3 py-2 text-[13px] font-semibold text-canvas transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            Replay May 2024 flood
+            Replay the May 2024 flood
           </button>
+        </div>
+
+        <div aria-hidden="true" className="-my-2 flex items-center gap-3 text-[11px] text-ink-muted">
+          <span className="h-px flex-1 bg-line" />
+          or configure a run
+          <span className="h-px flex-1 bg-line" />
         </div>
 
         <Section title="Engine">
@@ -237,7 +265,7 @@ export function ConfigPanel({ status, setup, seedPlacementError, onStart, onRepl
         </Section>
 
         {engine === 'fast' ? (
-          <p className="text-xs leading-snug text-mist-muted">
+          <p className="text-xs leading-snug text-ink-muted">
             Real May 2024 event: one steady classification at the observed peak discharge. No time steps, so there is
             no frame interval or outflow fraction.
           </p>
@@ -270,9 +298,9 @@ export function ConfigPanel({ status, setup, seedPlacementError, onStart, onRepl
                     disabled={busy}
                     describedBy="seed-volume-hint"
                   >
-                    <div id="seed-volume-hint" className="flex flex-col gap-0.5 text-xs leading-snug text-mist-muted">
+                    <div id="seed-volume-hint" className="flex flex-col gap-0.5 text-xs leading-snug text-ink-muted">
                       <span>Summed cell depth (m), as the log's volume.</span>
-                      <span className="text-mist tabular-nums">
+                      <span className="text-ink tabular-nums">
                         {formatNumber(seedVolume / SEED_PATCH_CELLS)} m deep over the 5×5 seed patch, ≈{' '}
                         {formatNumber(seedVolume * resolution * resolution)} m³ on the {resolution} m grid.
                       </span>
@@ -301,15 +329,15 @@ export function ConfigPanel({ status, setup, seedPlacementError, onStart, onRepl
               collapsible
               aside={
                 tuningChanged && (
-                  <span className="ml-auto flex items-center gap-1.5 text-xs text-gauge">
-                    <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-gauge" />
+                  <span className="ml-auto flex items-center gap-1.5 text-xs text-accent">
+                    <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-accent" />
                     Changed
                   </span>
                 )
               }
             >
               <div className="flex flex-col gap-1.5">
-                <span className="text-[13px] font-medium text-mist">Neighborhood</span>
+                <span className="text-[13px] font-medium text-ink">Neighborhood</span>
                 <Segmented
                   name="neighborhood"
                   label="Neighborhood"
@@ -319,7 +347,7 @@ export function ConfigPanel({ status, setup, seedPlacementError, onStart, onRepl
                   disabled={busy}
                 />
                 {neighborhood === 'moore' ? (
-                  <span className="text-xs leading-snug text-mist-muted">{VALIDATED_NEIGHBORHOOD_NOTE}</span>
+                  <span className="text-xs leading-snug text-ink-muted">{VALIDATED_NEIGHBORHOOD_NOTE}</span>
                 ) : (
                   <Callout tone="warn">{VALIDATED_NEIGHBORHOOD_NOTE}</Callout>
                 )}
@@ -349,7 +377,7 @@ export function ConfigPanel({ status, setup, seedPlacementError, onStart, onRepl
                 describedBy={neighborhood === 'von_neumann' ? 'outflow-fraction-hint' : undefined}
               >
                 {neighborhood === 'von_neumann' && (
-                  <span id="outflow-fraction-hint" className="text-xs leading-snug text-mist-muted">
+                  <span id="outflow-fraction-hint" className="text-xs leading-snug text-ink-muted">
                     At most {VON_NEUMANN_MAX_OUTFLOW_FRACTION} with von Neumann: above that its result depends on the
                     engine's substep size.
                   </span>
@@ -360,7 +388,7 @@ export function ConfigPanel({ status, setup, seedPlacementError, onStart, onRepl
         )}
       </div>
 
-      <p className="border-t border-basalt-line bg-basalt px-4 py-3 text-xs leading-snug text-mist-muted">{summary}</p>
+      <p className="mx-3 mb-1 rounded-lg bg-sunken px-3 py-2.5 text-xs leading-snug text-ink-muted">{summary}</p>
     </form>
   )
 }

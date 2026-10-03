@@ -1,26 +1,28 @@
 import { DEPTH_BANDS, FLOODED_DEPTH_THRESHOLD_M, OVERLAY_OPACITY } from '../rendering/depthToImage'
 
-function bandLabel(min: number, max: number | null): string {
-  return max === null ? `≥ ${min}` : `${min}–${max}`
-}
-
-/** Depth -> color key for the flood overlay, read from the same DEPTH_BANDS the rasterizer uses. */
+/** Depth -> color key for the flood overlay as one stepped scale, read from the same DEPTH_BANDS the rasterizer uses. */
 export function DepthLegend() {
+  const last = DEPTH_BANDS[DEPTH_BANDS.length - 1]
   return (
-    <div className="rounded bg-basalt/95 px-3 py-2 text-xs text-mist shadow-lg">
-      <div className="mb-1.5 font-display text-[13px] font-semibold">Water depth (m)</div>
-      <ul className="flex flex-col gap-1">
-        {[...DEPTH_BANDS].reverse().map(({ min, max, color }) => (
-          <li key={min} className="flex items-center gap-2">
-            {/* On a white backing, so the swatch shows the color as composited over the light map. */}
-            <span className="inline-flex rounded-sm bg-white p-px">
-              <span className="inline-block h-3 w-5 rounded-[1px]" style={{ background: color, opacity: OVERLAY_OPACITY }} />
-            </span>
-            <span className="tabular-nums">{bandLabel(min, max)}</span>
-          </li>
+    <div className="float-card w-60 rounded-xl px-3 py-2.5 text-xs text-ink">
+      <div className="mb-2 flex items-baseline justify-between">
+        <span className="text-[13px] font-semibold">Water depth</span>
+        <span className="text-ink-muted">metres</span>
+      </div>
+      {/* On a white backing, so the swatches show the colors as composited over the light map. */}
+      <div className="flex gap-px overflow-hidden rounded-[3px] bg-white p-px">
+        {DEPTH_BANDS.map(({ min, color }) => (
+          <span key={min} className="h-2.5 flex-1 first:rounded-l-[2px] last:rounded-r-[2px]" style={{ background: color, opacity: OVERLAY_OPACITY }} />
         ))}
-      </ul>
-      <div className="mt-1.5 text-mist-muted">Under {FLOODED_DEPTH_THRESHOLD_M} m: dry</div>
+      </div>
+      <div className="mt-1 flex text-[10.5px] text-ink-muted tabular-nums">
+        {DEPTH_BANDS.map(({ min }) => (
+          <span key={min} className="flex-1">
+            {min === last.min ? `${min}+` : min}
+          </span>
+        ))}
+      </div>
+      <div className="mt-1 text-[10.5px] text-ink-muted">Dry below {FLOODED_DEPTH_THRESHOLD_M} m</div>
     </div>
   )
 }

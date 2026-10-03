@@ -29,31 +29,31 @@ type SectionId = (typeof SECTIONS)[number]['id']
 /** A UI control's name as the app labels it, so the instructions read like the screen. */
 function Ui({ children }: { children: ReactNode }) {
   return (
-    <span className="rounded bg-basalt-raised px-1.5 py-px font-medium whitespace-nowrap text-mist">{children}</span>
+    <span className="rounded bg-surface px-1.5 py-px font-medium whitespace-nowrap text-ink">{children}</span>
   )
 }
 
 function Formula({ children }: { children: ReactNode }) {
-  return <code className="rounded bg-[#151b1d] px-1.5 py-px font-mono whitespace-nowrap text-[12.5px] text-gauge">{children}</code>
+  return <code className="rounded bg-sunken px-1.5 py-px font-mono whitespace-nowrap text-[12.5px] text-accent">{children}</code>
 }
 
 function AboutSection({ id, title, children }: { id: SectionId; title: string; children: ReactNode }) {
   return (
-    <section id={id} aria-labelledby={`${id}-title`} className="scroll-mt-6 border-t border-basalt-line pt-8">
-      <h2 id={`${id}-title`} className="mb-4 font-display text-2xl font-semibold text-mist">
+    <section id={id} aria-labelledby={`${id}-title`} className="scroll-mt-6 border-t border-line pt-8">
+      <h2 id={`${id}-title`} className="mb-4 font-serif text-[34px] leading-tight text-ink">
         {title}
       </h2>
-      <div className="flex flex-col gap-4 text-[15px] leading-relaxed text-mist/85">{children}</div>
+      <div className="flex flex-col gap-4 text-[15px] leading-relaxed text-ink/85">{children}</div>
     </section>
   )
 }
 
 function RuleStep({ n, title, children }: { n: number; title: string; children: ReactNode }) {
   return (
-    <li className="flex flex-col gap-1.5 rounded-md border border-basalt-line bg-basalt-raised p-4">
-      <span className="font-display text-xs font-semibold tracking-wide text-gauge uppercase">Step {n}</span>
-      <span className="font-display text-base font-semibold text-mist">{title}</span>
-      <div className="text-sm leading-relaxed text-mist/80">{children}</div>
+    <li className="flex flex-col gap-1.5 rounded-xl border border-line bg-surface p-4">
+      <span className="font-display text-xs font-semibold tracking-wide text-accent uppercase">Step {n}</span>
+      <span className="font-display text-base font-semibold text-ink">{title}</span>
+      <div className="text-sm leading-relaxed text-ink/80">{children}</div>
     </li>
   )
 }
@@ -67,17 +67,17 @@ interface EngineCardProps {
 
 function EngineCard({ name, tagline, stats, children }: EngineCardProps) {
   return (
-    <div className="flex flex-col gap-3 rounded-md border border-basalt-line bg-basalt-raised p-5">
+    <div className="flex flex-col gap-3 rounded-xl border border-line bg-surface p-5">
       <div>
-        <h3 className="font-display text-lg font-semibold text-mist">{name}</h3>
-        <p className="text-sm text-mist-muted">{tagline}</p>
+        <h3 className="font-display text-lg font-semibold text-ink">{name}</h3>
+        <p className="text-sm text-ink-muted">{tagline}</p>
       </div>
-      <div className="text-sm leading-relaxed text-mist/80">{children}</div>
-      <dl className="mt-auto grid grid-cols-2 gap-3 border-t border-basalt-line pt-3">
+      <div className="text-sm leading-relaxed text-ink/80">{children}</div>
+      <dl className="mt-auto grid grid-cols-2 gap-3 border-t border-line pt-3">
         {stats.map(({ label, value }) => (
           <div key={label}>
-            <dt className="text-xs text-mist-muted">{label}</dt>
-            <dd className="font-display text-xl font-semibold text-mist tabular-nums">{value}</dd>
+            <dt className="text-xs text-ink-muted">{label}</dt>
+            <dd className="font-serif text-3xl leading-tight text-ink tabular-nums">{value}</dd>
           </div>
         ))}
       </dl>
@@ -121,20 +121,20 @@ export function AboutPage({ onClose }: AboutPageProps) {
     scrollRef.current?.querySelector(`#${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 
   return (
-    <div ref={scrollRef} className="h-full overflow-y-auto bg-basalt">
+    <div ref={scrollRef} className="h-full overflow-y-auto bg-canvas">
       <article className="mx-auto flex max-w-[860px] flex-col gap-10 px-4 py-10 sm:px-8 sm:py-14">
         <header className="flex flex-col gap-5">
-          <span className="font-display text-xs font-semibold tracking-[0.18em] text-gauge uppercase">About</span>
-          <h1 className="font-display text-4xl leading-tight font-semibold text-mist sm:text-5xl">
+          <span className="font-display text-xs font-semibold tracking-[0.18em] text-accent uppercase">About</span>
+          <h1 className="font-serif text-5xl leading-[1.05] text-ink sm:text-6xl">
             Flood simulation for the Vale do Taquari, one cell at a time
           </h1>
-          <p className="max-w-[68ch] text-lg leading-relaxed text-mist/85">
+          <p className="max-w-[68ch] text-lg leading-relaxed text-ink/85">
             Terranova simulates how the Taquari river spreads over the land between Lajeado and Estrela. It uses a{' '}
-            <strong className="font-semibold text-mist">macroscopic cellular automaton</strong>: the valley becomes a
+            <strong className="font-semibold text-ink">macroscopic cellular automaton</strong>: the valley becomes a
             grid of cells, and each cell passes water to its neighbors by a simple local rule. The aim is a flood map
             fast enough to rerun many times, accurate enough to trust, built only from public data.
           </p>
-          <p className="text-sm text-mist-muted">
+          <p className="text-sm text-ink-muted">
             Undergraduate thesis (TCC), Software Engineering, Univates · Lucca Coutinho Heineck · Advisor: Prof. Me.
             Edson Moacir Ahlert
           </p>
@@ -142,14 +142,14 @@ export function AboutPage({ onClose }: AboutPageProps) {
             <button
               type="button"
               onClick={onClose}
-              className="rounded bg-gauge px-4 py-2 text-sm font-semibold text-basalt transition-colors hover:bg-gauge-strong"
+              className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-canvas transition-colors hover:bg-accent-strong"
             >
               Open the simulator
             </button>
             <button
               type="button"
               onClick={() => goTo('about-usage')}
-              className="rounded border border-mist-muted px-4 py-2 text-sm font-medium text-mist transition-colors hover:border-mist hover:bg-basalt-raised"
+              className="rounded-lg border border-ink-muted px-4 py-2 text-sm font-medium text-ink transition-colors hover:border-ink hover:bg-surface"
             >
               How to use it
             </button>
@@ -160,7 +160,7 @@ export function AboutPage({ onClose }: AboutPageProps) {
                 key={id}
                 type="button"
                 onClick={() => goTo(id)}
-                className="text-mist-muted underline-offset-4 hover:text-mist hover:underline"
+                className="text-ink-muted underline-offset-4 hover:text-ink hover:underline"
               >
                 {label}
               </button>
@@ -192,7 +192,7 @@ export function AboutPage({ onClose }: AboutPageProps) {
               a lower one.
             </RuleStep>
             <RuleStep n={2} title="Split the outflow">
-              <span className="mb-1.5 flex items-center gap-2 text-mist">
+              <span className="mb-1.5 flex items-center gap-2 text-ink">
                 <NeighborhoodGlyph kind="moore" /> 8 neighbors (Moore)
               </span>
               Lower neighbors get a share weighted by Manning&rsquo;s equation, <Formula>√S / n</Formula>: steeper and
@@ -254,9 +254,9 @@ export function AboutPage({ onClose }: AboutPageProps) {
             study area is a box about 6 km across, over the river between Lajeado and Estrela, at 30, 60 or 90 m per
             cell.
           </p>
-          <div className="overflow-hidden rounded-md border border-basalt-line">
+          <div className="overflow-hidden rounded-md border border-line">
             <table className="w-full text-left text-sm">
-              <thead className="bg-basalt-raised text-xs text-mist-muted">
+              <thead className="bg-surface text-xs text-ink-muted">
                 <tr>
                   <th scope="col" className="px-4 py-2.5 font-medium">Input</th>
                   <th scope="col" className="px-4 py-2.5 font-medium">Source</th>
@@ -265,15 +265,15 @@ export function AboutPage({ onClose }: AboutPageProps) {
               </thead>
               <tbody>
                 {DATA_ROWS.map(({ what, source, use }) => (
-                  <tr key={what} className="border-t border-basalt-line align-top">
-                    <th scope="row" className="px-4 py-3 font-display font-semibold whitespace-nowrap text-mist">
+                  <tr key={what} className="border-t border-line align-top">
+                    <th scope="row" className="px-4 py-3 font-display font-semibold whitespace-nowrap text-ink">
                       {what}
                     </th>
-                    <td className="px-4 py-3 text-mist/80">
+                    <td className="px-4 py-3 text-ink/80">
                       {source}
-                      <span className="mt-1 block text-mist-muted sm:hidden">{use}</span>
+                      <span className="mt-1 block text-ink-muted sm:hidden">{use}</span>
                     </td>
-                    <td className="hidden px-4 py-3 text-mist/80 sm:table-cell">{use}</td>
+                    <td className="hidden px-4 py-3 text-ink/80 sm:table-cell">{use}</td>
                   </tr>
                 ))}
               </tbody>
@@ -289,7 +289,7 @@ export function AboutPage({ onClose }: AboutPageProps) {
               side by side in the <Ui>Compare</Ui> view.
             </UsageStep>
             <UsageStep n={2} title="Or set up your own run">
-              Pick an <strong className="text-mist">engine</strong> and a <strong className="text-mist">grid</strong>.
+              Pick an <strong className="text-ink">engine</strong> and a <strong className="text-ink">grid</strong>.
               For the temporal CA, choose a scenario: <Ui>May 2024 gauges</Ui> drives the run with the real river
               record, while <Ui>Seeded pool</Ui> drops a pool of water and lets it spread. For a seeded pool you can
               set the number of steps and the volume, and click the map inside the dashed outline to choose where
@@ -301,13 +301,13 @@ export function AboutPage({ onClose }: AboutPageProps) {
               early and keeps what has arrived. The status pill in the top bar shows where the run is.
             </UsageStep>
             <UsageStep n={4} title="Explore the map">
-              <ul className="mt-1 flex list-disc flex-col gap-1.5 pl-5 marker:text-mist-muted">
+              <ul className="mt-1 flex list-disc flex-col gap-1.5 pl-5 marker:text-ink-muted">
                 <li>
                   <Ui>Temporal</Ui>, <Ui>Fast</Ui> and <Ui>Compare</Ui> (top right) switch between results. In Compare
                   both maps pan and zoom together.
                 </li>
                 <li>
-                  The <strong className="text-mist">timeline</strong> under the temporal map scrubs and replays the
+                  The <strong className="text-ink">timeline</strong> under the temporal map scrubs and replays the
                   frames received so far; <Ui>Jump to latest</Ui> follows the run again.
                 </li>
                 <li>
@@ -327,14 +327,14 @@ export function AboutPage({ onClose }: AboutPageProps) {
               per frame received: the step, simulated time and volume, or the fast engine&rsquo;s discharge and timing.
             </UsageStep>
           </ol>
-          <p className="text-sm text-mist-muted">
+          <p className="text-sm text-ink-muted">
             Tip: click the active menu item, or the panel button at the bottom of the menu, to collapse the side panel
             and give the map the full width.
           </p>
         </AboutSection>
 
         <AboutSection id="about-limits" title="Limits worth knowing">
-          <ul className="flex list-disc flex-col gap-2 pl-5 marker:text-mist-muted">
+          <ul className="flex list-disc flex-col gap-2 pl-5 marker:text-ink-muted">
             <li>
               Only the 90 m grid is validated. The 30 m and 60 m grids run the same model at finer detail, but their
               results are not scored.
@@ -357,7 +357,7 @@ export function AboutPage({ onClose }: AboutPageProps) {
           </ul>
         </AboutSection>
 
-        <footer className="flex flex-col gap-3 border-t border-basalt-line pt-8 text-sm text-mist-muted">
+        <footer className="flex flex-col gap-3 border-t border-line pt-8 text-sm text-ink-muted">
           <p>
             Built with Python, NumPy, rasterio and FastAPI (with WebSockets) on the backend, and React, TypeScript,
             Vite and Leaflet on the frontend, packaged with Docker Compose.
@@ -365,7 +365,7 @@ export function AboutPage({ onClose }: AboutPageProps) {
           <button
             type="button"
             onClick={onClose}
-            className="self-start rounded border border-gauge px-4 py-2 text-sm font-medium text-gauge transition-colors hover:bg-gauge hover:text-basalt"
+            className="self-start rounded-lg border border-accent px-4 py-2 text-sm font-medium text-accent transition-colors hover:bg-accent hover:text-canvas"
           >
             Open the simulator
           </button>
@@ -380,12 +380,12 @@ function UsageStep({ n, title, children }: { n: number; title: string; children:
     <li className="grid grid-cols-[2rem_minmax(0,1fr)] gap-x-3">
       <span
         aria-hidden="true"
-        className="flex h-7 w-7 items-center justify-center rounded-full border border-gauge font-display text-sm font-semibold text-gauge"
+        className="flex h-7 w-7 items-center justify-center rounded-full border border-accent font-display text-sm font-semibold text-accent"
       >
         {n}
       </span>
       <div className="flex flex-col gap-1">
-        <h3 className="font-display text-lg font-semibold text-mist">{title}</h3>
+        <h3 className="font-display text-lg font-semibold text-ink">{title}</h3>
         <div>{children}</div>
       </div>
     </li>

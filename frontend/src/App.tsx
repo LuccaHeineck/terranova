@@ -13,6 +13,7 @@ import { AboutPage } from './components/AboutPage'
 import { Sidebar, WIDE_SCREEN_QUERY } from './components/Sidebar'
 import type { Page, SidebarTab } from './components/Sidebar'
 import { TopBar } from './components/TopBar'
+import { useTheme } from './theme'
 
 export default function App() {
   const run = useSimulationRun()
@@ -41,6 +42,14 @@ export default function App() {
   const [tab, setTab] = useState<SidebarTab>('setup')
   const [page, setPage] = useState<Page>('map')
   const [panelOpen, setPanelOpen] = useState(true)
+  const [theme, setTheme] = useTheme()
+  // From the About page the toggle goes back to the map with the panel open; on the map it shows or hides it.
+  const togglePanel = () => {
+    if (page === 'about') {
+      setPage('map')
+      setPanelOpen(true)
+    } else setPanelOpen((open) => !open)
+  }
   // A run's results are what to look at next: show them on the map, and on a narrow screen get the drawer off
   // it. A wide screen keeps the panel as the user left it, collapsed or not.
   const showResults = () => {
@@ -58,14 +67,20 @@ export default function App() {
   }
 
   return (
-    <div className="grid h-screen grid-rows-[52px_minmax(0,1fr)] overflow-hidden bg-basalt text-mist">
+    <div className="grid h-screen grid-rows-[56px_minmax(0,1fr)] overflow-hidden bg-canvas text-ink">
       <TopBar
         status={run.status}
         gridShape={run.gridShape}
         resolution={shownLayer?.resolution ?? null}
         onStop={run.stop}
+        panelOpen={page === 'map' && panelOpen}
+        onTogglePanel={togglePanel}
+        page={page}
+        onPage={setPage}
+        theme={theme}
+        onTheme={setTheme}
       />
-      <div className="relative flex min-h-0">
+      <div className="relative flex min-h-0 px-1.5 pb-1.5 sm:px-2 sm:pb-2">
         <Sidebar
           tab={tab}
           onTab={setTab}
@@ -100,7 +115,8 @@ export default function App() {
             log: <LogPanel log={run.log} />,
           }}
         />
-        <main className="relative min-w-0 flex-1">
+        {/* The map is an inset card on the canvas, so the chrome around it can stay borderless. */}
+        <main className="relative min-w-0 flex-1 overflow-hidden rounded-xl bg-surface ring-1 ring-line">
           {/* The map stays mounted under the About page, so a run keeps streaming and the view keeps its place. */}
           <div inert={page === 'about'} className="h-full">
             <FloodMap

@@ -66,7 +66,7 @@ export function SliderField({
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between gap-2">
-        <label htmlFor={id} className="text-[13px] font-medium text-mist">
+        <label htmlFor={id} className="text-[13px] font-medium text-ink">
           {label}
         </label>
         <div className="flex items-center gap-1">
@@ -82,7 +82,7 @@ export function SliderField({
             aria-describedby={describedBy}
             className={`${fieldBoxClass} h-7 w-20 text-right`}
           />
-          {unit && <span className="text-xs text-mist-muted">{unit}</span>}
+          {unit && <span className="text-xs text-ink-muted">{unit}</span>}
         </div>
       </div>
       <div className={`relative ${marks.length ? 'pb-3.5' : ''}`}>
@@ -106,7 +106,7 @@ export function SliderField({
               <span
                 key={mark.label}
                 aria-hidden="true"
-                className="absolute bottom-0 flex flex-col items-center text-[10px] leading-none text-mist-muted"
+                className="absolute bottom-0 flex flex-col items-center text-[10px] leading-none text-ink-muted"
                 // Track ends sit half a thumb (7px) in from the input's edges.
                 style={{
                   left: `calc(7px + (100% - 14px) * ${f})`,

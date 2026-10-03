@@ -21,7 +21,7 @@ export function LogPanel({ log }: LogPanelProps) {
   return (
     <div className="flex min-h-0 flex-1 flex-col px-4 pt-1 pb-4">
       {log.length === 0 ? (
-        <p className="text-[13px] text-mist-muted">Nothing logged yet. A run's progress appears here.</p>
+        <p className="text-[13px] text-ink-muted">Nothing logged yet. A run's progress appears here.</p>
       ) : (
         <ul
           ref={logRef}
@@ -29,7 +29,7 @@ export function LogPanel({ log }: LogPanelProps) {
             const el = e.currentTarget
             atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_TO_BOTTOM_PX
           }}
-          className="min-h-0 flex-1 overflow-y-auto rounded border border-basalt-line bg-[#151b1d] p-2.5 font-mono text-[11px] leading-relaxed text-mist/90"
+          className="min-h-0 flex-1 overflow-y-auto rounded-xl bg-sunken p-3 font-mono text-[11px] leading-relaxed text-ink/85"
         >
           {log.map((line, i) => (
             <li key={i} className="wrap-break-word">

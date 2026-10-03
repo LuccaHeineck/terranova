@@ -11,7 +11,7 @@ interface ToggleProps {
 export function Toggle({ checked, onChange, disabled, children }: ToggleProps) {
   return (
     <label className="relative flex cursor-pointer items-center justify-between gap-3 has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50">
-      <span className="text-[13px] font-medium text-mist">{children}</span>
+      <span className="text-[13px] font-medium text-ink">{children}</span>
       <input
         type="checkbox"
         role="switch"
@@ -22,7 +22,7 @@ export function Toggle({ checked, onChange, disabled, children }: ToggleProps) {
       />
       <span
         aria-hidden="true"
-        className="relative h-5 w-9 shrink-0 rounded-full bg-basalt-line transition-colors peer-checked:bg-gauge peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-gauge after:absolute after:top-0.5 after:left-0.5 after:h-4 after:w-4 after:rounded-full after:bg-mist after:transition-transform peer-checked:after:translate-x-4 peer-checked:after:bg-basalt"
+        className="relative h-5 w-9 shrink-0 rounded-full bg-line transition-colors peer-checked:bg-accent peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-accent after:absolute after:top-0.5 after:left-0.5 after:h-4 after:w-4 after:rounded-full after:bg-surface after:shadow-sm after:transition-transform peer-checked:after:translate-x-4"
       />
     </label>
   )

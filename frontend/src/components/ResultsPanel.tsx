@@ -58,8 +58,8 @@ function degrees(value: number, positive: string, negative: string): string {
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-3">
-      <dt className="text-mist-muted">{label}</dt>
-      <dd className="text-right text-mist tabular-nums">{children}</dd>
+      <dt className="text-ink-muted">{label}</dt>
+      <dd className="text-right text-ink tabular-nums">{children}</dd>
     </div>
   )
 }
@@ -74,7 +74,7 @@ function AgreementBar({ agreement }: { agreement: ExtentAgreement }) {
   ]
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex h-3 overflow-hidden rounded-sm bg-basalt-line" role="img" aria-label="Flooded-cell agreement">
+      <div className="flex h-2.5 overflow-hidden rounded-full bg-line" role="img" aria-label="Flooded-cell agreement">
         {total > 0 &&
           parts.map(({ key, cells, fill }) => (
             <span key={key} style={{ ...fill, width: `${(cells / total) * 100}%` }} className="h-full" />
@@ -84,10 +84,10 @@ function AgreementBar({ agreement }: { agreement: ExtentAgreement }) {
         {parts.map(({ key, label, cells, fill }) => (
           <div key={key} className="flex items-center gap-2">
             <span aria-hidden="true" className="h-2.5 w-2.5 shrink-0 rounded-sm" style={fill} />
-            <dt className="text-mist-muted">{label}</dt>
-            <dd className="ml-auto text-mist tabular-nums">
+            <dt className="text-ink-muted">{label}</dt>
+            <dd className="ml-auto text-ink tabular-nums">
               {count(cells)} cells
-              {total > 0 && <span className="ml-1.5 text-mist-muted">{Math.round((cells / total) * 100)}%</span>}
+              {total > 0 && <span className="ml-1.5 text-ink-muted">{Math.round((cells / total) * 100)}%</span>}
             </dd>
           </div>
         ))}
@@ -114,18 +114,16 @@ function ScoreCard({ run, observed }: { run: ScoredRun; observed: ObservedMasks 
   if (!agreement) return null
   const { corrected, naive } = agreement
   return (
-    <div className="flex flex-col gap-1 rounded bg-basalt-raised px-2.5 py-2 text-xs">
+    <div className="flex flex-col gap-1.5 rounded-xl bg-surface px-3 py-2.5 text-xs ring-1 ring-line">
       <div className="flex items-baseline justify-between gap-2">
-        <span className="font-display text-sm font-semibold text-mist">{run.name}</span>
-        <span className="text-mist-muted">{run.when}</span>
+        <span className="text-[13px] font-semibold text-ink">{run.name}</span>
+        <span className="text-ink-muted">{run.when}</span>
       </div>
       <div className="flex items-baseline gap-2">
-        <span className="font-display text-2xl leading-none font-semibold text-mist tabular-nums">
-          {metric(corrected.csi)}
-        </span>
-        <span className="text-mist-muted">CSI, gap-corrected</span>
+        <span className="font-serif text-[40px] leading-none text-ink tabular-nums">{metric(corrected.csi)}</span>
+        <span className="text-ink-muted">CSI, gap-corrected</span>
       </div>
-      <dl className="mt-0.5 flex flex-col gap-0.5">
+      <dl className="mt-1 flex flex-col gap-0.5 border-t border-line pt-1.5">
         <Row label="Hit rate">{metric(corrected.hitRate)}</Row>
         <Row label="False alarm rate">{metric(corrected.falseAlarmRate)}</Row>
         <Row label="Hit / missed / false alarm">
@@ -168,7 +166,7 @@ function ObservedScores({ temporal, fast, temporalFrame, observed }: ObservedSco
 
   return (
     <Section title="Against the observed flood">
-      <p className="-mt-1 text-xs leading-snug text-mist-muted">
+      <p className="-mt-1 text-xs leading-snug text-ink-muted">
         SGB/CPRM extent at the {observed.stageM.toFixed(2)} m peak stage. Gap-corrected scores leave out the{' '}
         {count(observed.excludedCount)} Estrela-side cells the reference never modeled. Documented: the temporal CA
         scores CSI 0.90 at the peak.
@@ -207,15 +205,15 @@ function Comparison({ temporal, fast, temporalFrame, followingLatest }: Comparis
 
   return (
     <Section title="Comparison">
-      <p className="-mt-1 text-xs text-mist-muted">
+      <p className="-mt-1 text-xs text-ink-muted">
         {temporal.resolution} m grid{followingLatest ? '' : ', temporal frame selected on the timeline'}. Flooded
         means depth &gt; {FLOODED_DEPTH_THRESHOLD_M} m.
       </p>
       {agreement && <AgreementBar agreement={agreement} />}
 
       <div className="flex flex-col gap-2 text-xs">
-        <div className="flex flex-col gap-0.5 rounded bg-basalt-raised px-2.5 py-2">
-          <span className="font-display text-sm font-semibold text-mist">Temporal CA</span>
+        <div className="flex flex-col gap-1 rounded-xl bg-surface px-3 py-2.5 ring-1 ring-line">
+          <span className="text-[13px] font-semibold text-ink">Temporal CA</span>
           <dl className="flex flex-col gap-0.5">
             <Row label="Flooded">
               {count(temporalFlooded)} cells at t = {elapsedHours.toFixed(1)} h
@@ -223,8 +221,8 @@ function Comparison({ temporal, fast, temporalFrame, followingLatest }: Comparis
             <Row label="Wall-clock">{wallClock(temporal)}</Row>
           </dl>
         </div>
-        <div className="flex flex-col gap-0.5 rounded bg-basalt-raised px-2.5 py-2">
-          <span className="font-display text-sm font-semibold text-mist">Fast</span>
+        <div className="flex flex-col gap-1 rounded-xl bg-surface px-3 py-2.5 ring-1 ring-line">
+          <span className="text-[13px] font-semibold text-ink">Fast</span>
           <dl className="flex flex-col gap-0.5">
             <Row label="Flooded">
               {count(fastFrame.flooded_cells ?? 0)} cells at the peak (t = {peakHours.toFixed(1)} h)
@@ -272,18 +270,18 @@ export function ResultsPanel({
   const empty = status === 'idle' && !temporal && !fast && !error
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pt-1 pb-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-4 pt-1 pb-5">
       {error && <Callout tone="error">{error}</Callout>}
 
       {empty ? (
-        <div className="flex flex-col items-start gap-3 rounded-md border border-dashed border-basalt-line p-4">
-          <p className="text-[13px] leading-snug text-mist-muted">
+        <div className="flex flex-col items-start gap-3 rounded-xl border border-dashed border-line p-5">
+          <p className="text-[13px] leading-snug text-ink-muted">
             No results yet. Set up a run, or replay the May 2024 flood.
           </p>
           <button
             type="button"
             onClick={onGoToSetup}
-            className="rounded border border-basalt-line px-3 py-1.5 text-[13px] text-mist hover:border-mist-muted"
+            className="rounded-lg bg-surface px-3 py-1.5 text-[13px] font-medium text-ink ring-1 ring-line hover:bg-sunken"
           >
             Go to setup
           </button>
@@ -296,7 +294,7 @@ export function ResultsPanel({
             {gridShape && (
               <Row label="Cells">
                 {count(gridShape[0])} × {count(gridShape[1])}{' '}
-                <span className="text-mist-muted">({count(gridShape[0] * gridShape[1])})</span>
+                <span className="text-ink-muted">({count(gridShape[0] * gridShape[1])})</span>
               </Row>
             )}
             {bounds && (

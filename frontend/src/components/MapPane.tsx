@@ -13,7 +13,7 @@ interface MapPaneProps {
   basemap: Basemap
   /** The flood overlay image; null shows the basemap only. */
   imageUrl: string | null
-  /** Engine name drawn over the pane, for the two-pane Compare view. */
+  /** Engine name drawn over the pane (above its legend), for the two-pane Compare view. */
   label?: string
   /** Key for this pane's overlay, drawn in its bottom-left corner. */
   legend?: ReactNode
@@ -112,7 +112,9 @@ export function MapPane({
     const container = containerRef.current
     if (!container || mapRef.current) return
 
-    const map = L.map(container).setView(DEFAULT_CENTER, DEFAULT_ZOOM)
+    // Zoom sits bottom right, out of the way of the pane label and the view switcher along the top.
+    const map = L.map(container, { zoomControl: false }).setView(DEFAULT_CENTER, DEFAULT_ZOOM)
+    L.control.zoom({ position: 'bottomright' }).addTo(map)
     const reliefPane = map.createPane(RELIEF_PANE)
     reliefPane.style.zIndex = RELIEF_PANE_Z_INDEX
     reliefPane.style.mixBlendMode = 'multiply'
@@ -273,12 +275,17 @@ export function MapPane({
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="h-full w-full" />
-      {label && (
-        <div className="pointer-events-none absolute top-3 left-14 z-1000 rounded bg-basalt/95 px-2.5 py-1 font-display text-[13px] font-semibold text-mist shadow-lg tabular-nums">
-          {label}
+      {/* The pane's name sits on top of its key, bottom left: the top edge belongs to the view switcher. */}
+      {(label || legend) && (
+        <div className="absolute bottom-3 left-3 z-1000 flex flex-col items-start gap-2">
+          {label && (
+            <div className="float-card pointer-events-none rounded-lg px-2.5 py-1 text-[13px] font-semibold text-ink tabular-nums">
+              {label}
+            </div>
+          )}
+          {legend}
         </div>
       )}
-      {legend && <div className="absolute bottom-6 left-3 z-1000">{legend}</div>}
     </div>
   )
 }

@@ -134,3 +134,25 @@ export const IconPanel = (props: SVGProps<SVGSVGElement>) => (
     <path d="M8 4v12M13.5 8l-2 2 2 2" />
   </Icon>
 )
+
+/** Map layers: a stack of sheets. */
+export const IconLayers = (props: SVGProps<SVGSVGElement>) => (
+  <Icon {...props}>
+    <path d="M10 3l7 3.5-7 3.5-7-3.5z" />
+    <path d="M3 10l7 3.5 7-3.5M3 13.5L10 17l7-3.5" />
+  </Icon>
+)
+
+/** Theme: a half-filled circle. */
+export const IconTheme = (props: SVGProps<SVGSVGElement>) => (
+  <Icon {...props}>
+    <circle cx="10" cy="10" r="6.5" />
+    <path d="M10 3.5a6.5 6.5 0 0 1 0 13z" fill="currentColor" />
+  </Icon>
+)
+
+export const IconCheck = (props: SVGProps<SVGSVGElement>) => (
+  <Icon {...props}>
+    <path d="M4.5 10.5l3.5 3.5 7.5-8" />
+  </Icon>
+)

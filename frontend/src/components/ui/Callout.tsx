@@ -8,8 +8,8 @@ interface CalloutProps {
 }
 
 const TONE = {
-  info: { frame: 'border-mist-muted bg-basalt-raised', icon: 'text-mist-muted', Icon: IconInfo },
-  warn: { frame: 'border-ochre bg-ochre/10', icon: 'text-ochre', Icon: IconWarn },
+  info: { frame: 'border-ink-muted/40 bg-sunken', icon: 'text-ink-muted', Icon: IconInfo },
+  warn: { frame: 'border-warn bg-warn/10', icon: 'text-warn', Icon: IconWarn },
   error: { frame: 'border-danger bg-danger/10', icon: 'text-danger', Icon: IconWarn },
 } as const
 
@@ -20,7 +20,7 @@ export function Callout({ tone, id, children }: CalloutProps) {
     <div
       id={id}
       role={tone === 'error' ? 'alert' : undefined}
-      className={`flex gap-2 rounded border-l-2 px-2.5 py-2 text-xs leading-snug text-mist ${frame}`}
+      className={`flex gap-2 rounded-lg border-l-2 px-3 py-2 text-xs leading-snug text-ink ${frame}`}
     >
       <Icon className={`mt-px h-4 w-4 shrink-0 ${icon}`} />
       <div className="min-w-0">{children}</div>

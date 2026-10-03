@@ -56,8 +56,8 @@ function formatDepth(depth: number): string {
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-3">
-      <dt className="text-mist-muted">{label}</dt>
-      <dd className="text-right text-mist tabular-nums">{children}</dd>
+      <dt className="text-ink-muted">{label}</dt>
+      <dd className="text-right text-ink tabular-nums">{children}</dd>
     </div>
   )
 }
@@ -65,13 +65,13 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 /** One source of numbers about the cell, under a heading that says which (with its pane's color, if any). */
 function Section({ title, swatch, aside, children }: { title: string; swatch?: string; aside?: ReactNode; children: ReactNode }) {
   return (
-    <section className="mt-2 border-t border-basalt-line pt-1.5">
+    <section className="mt-2 border-t border-line pt-1.5">
       <div className="mb-1 flex items-baseline justify-between gap-2">
-        <h3 className="flex items-center gap-1.5 font-display text-[13px] font-semibold">
+        <h3 className="flex items-center gap-1.5 text-[13px] font-semibold">
           {swatch && <span aria-hidden="true" className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: swatch }} />}
           {title}
         </h3>
-        {aside && <span className="text-mist-muted tabular-nums">{aside}</span>}
+        {aside && <span className="text-ink-muted tabular-nums">{aside}</span>}
       </div>
       {children}
     </section>
@@ -89,7 +89,7 @@ function firstWetText(layer: ResultLayer, frame: CompactFrame | null, cell: numb
 
 function NeighborBox({ neighbor }: { neighbor: NeighborShare }) {
   if (neighbor.wall) {
-    return <div className="flex items-center justify-center rounded-sm border border-dashed border-basalt-line text-mist-muted">wall</div>
+    return <div className="flex items-center justify-center rounded-sm border border-dashed border-line text-ink-muted">wall</div>
   }
   const lower = neighbor.share > 0
   // The neighbor's water surface relative to this cell's: negative is lower, where water can go.
@@ -97,9 +97,9 @@ function NeighborBox({ neighbor }: { neighbor: NeighborShare }) {
   return (
     <div
       className={`flex flex-col items-center justify-center rounded-sm leading-tight ${
-        lower ? (neighbor.share > 0.45 ? 'text-basalt' : 'text-mist') : 'bg-basalt text-mist-muted'
+        lower ? (neighbor.share > 0.45 ? 'text-canvas' : 'text-ink') : 'bg-sunken text-ink-muted'
       }`}
-      style={lower ? { background: `rgba(233, 194, 58, ${0.18 + 0.75 * neighbor.share})` } : undefined}
+      style={lower ? { background: `color-mix(in srgb, var(--color-accent) ${Math.round(18 + 75 * neighbor.share)}%, transparent)` } : undefined}
     >
       <span className="font-semibold">
         {lower ? `${ARROW[`${neighbor.dr},${neighbor.dc}`]} ${Math.round(neighbor.share * 100)}%` : 'uphill'}
@@ -149,9 +149,9 @@ function OutflowPanel({
             const key = `${dr},${dc}`
             if (dr === 0 && dc === 0) {
               return (
-                <div key={key} className="flex flex-col items-center justify-center rounded-sm border border-gauge leading-tight">
+                <div key={key} className="flex flex-col items-center justify-center rounded-sm border border-accent leading-tight">
                   <span className="font-semibold">this cell</span>
-                  <span className="text-[10px] text-mist-muted tabular-nums">
+                  <span className="text-[10px] text-ink-muted tabular-nums">
                     {!frame ? 'no water' : wet ? `h ${split.depth.toFixed(2)} m` : 'dry'}
                   </span>
                 </div>
@@ -163,7 +163,7 @@ function OutflowPanel({
           }),
         )}
       </div>
-      <p className="mt-1.5 text-mist-muted">
+      <p className="mt-1.5 text-ink-muted">
         {!split.flows
           ? 'No lower neighbor: water here stays put (a pit or a flat water surface).'
           : wet
@@ -185,27 +185,27 @@ export function CellInspector({ cell, inputs, temporal, fast, compare, onClose }
   const z = inputs ? inputs.elevation[index] : 0
 
   return (
-    <div className="max-h-full w-64 overflow-y-auto rounded bg-basalt/95 px-3 py-2 text-xs text-mist shadow-lg backdrop-blur-sm">
+    <div className="float-card max-h-full w-64 overflow-y-auto rounded-xl px-3 py-2.5 text-xs text-ink">
       <div className="flex items-start justify-between gap-2">
         <div>
-          <h2 className="font-display text-[13px] font-semibold">Cell inspector</h2>
-          <div className="text-mist-muted tabular-nums">
+          <h2 className="text-[13px] font-semibold">Cell inspector</h2>
+          <div className="text-ink-muted tabular-nums">
             row {cell.row}, col {cell.col}
             {inputs && ` · ${inputs.resolution} m grid`}
           </div>
-          {compare && <div className="text-mist-muted">The same cell in both panes, outlined in each.</div>}
+          {compare && <div className="text-ink-muted">The same cell in both panes, outlined in each.</div>}
         </div>
         <button
           type="button"
           onClick={onClose}
           aria-label="Close the cell inspector"
-          className="rounded p-0.5 text-mist-muted hover:bg-basalt-raised hover:text-mist"
+          className="rounded p-0.5 text-ink-muted hover:bg-surface hover:text-ink"
         >
           <IconClose className="h-4 w-4" />
         </button>
       </div>
       {!inputs ? (
-        <p className="mt-2 text-mist-muted">Loading the grid's terrain and land cover…</p>
+        <p className="mt-2 text-ink-muted">Loading the grid's terrain and land cover…</p>
       ) : (
         <>
           <Section title="Model inputs" aside="both engines">
@@ -228,7 +228,7 @@ export function CellInspector({ cell, inputs, temporal, fast, compare, onClose }
                 )}
                 <Row label="First wet">{firstWetText(temporal.layer, temporal.frame, index)}</Row>
               </dl>
-              <p className="mt-1 text-mist-muted">At the timeline's frame. First wet is exact to one frame interval.</p>
+              <p className="mt-1 text-ink-muted">At the timeline's frame. First wet is exact to one frame interval.</p>
             </Section>
           )}
           {fast && (

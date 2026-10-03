@@ -5,7 +5,7 @@ export interface SegmentOption<T extends string | number> {
   label: ReactNode
   /** A short second line under the label. */
   caption?: ReactNode
-  /** 'warn' draws the caption in ochre (while not selected), for options that are not validated. */
+  /** 'warn' draws the caption in the warning color (while not selected), for options that are not validated. */
   captionTone?: 'muted' | 'warn'
 }
 
@@ -25,13 +25,13 @@ export function Segmented<T extends string | number>({ name, label, value, optio
     <div
       role="radiogroup"
       aria-label={label}
-      className="grid gap-0.5 rounded-md bg-basalt-raised p-0.5"
+      className="grid gap-0.5 rounded-lg bg-sunken p-0.5"
       style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
     >
       {options.map((option) => (
         <label
           key={option.value}
-          className="group/seg relative flex cursor-pointer flex-col items-center justify-center rounded px-2 py-1.5 text-center text-mist transition-colors hover:bg-basalt-line/60 has-[:checked]:bg-gauge has-[:checked]:text-basalt has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-1 has-[:focus-visible]:outline-gauge"
+          className="group/seg relative flex cursor-pointer flex-col items-center justify-center rounded-md px-2 py-1.5 text-center text-ink-muted transition-colors hover:text-ink has-[:checked]:bg-surface has-[:checked]:text-ink has-[:checked]:shadow-sm has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-1 has-[:focus-visible]:outline-accent"
         >
           <input
             type="radio"
@@ -44,8 +44,8 @@ export function Segmented<T extends string | number>({ name, label, value, optio
           <span className="flex items-center gap-1.5 text-[13px] font-medium">{option.label}</span>
           {option.caption && (
             <span
-              className={`text-[11px] leading-tight group-has-[:checked]/seg:text-basalt/75 ${
-                option.captionTone === 'warn' ? 'text-ochre' : 'text-mist-muted'
+              className={`text-[11px] leading-tight group-has-[:checked]/seg:text-ink-muted ${
+                option.captionTone === 'warn' ? 'text-warn' : 'text-ink-muted'
               }`}
             >
               {option.caption}

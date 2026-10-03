@@ -20,10 +20,10 @@ interface NumberFieldProps {
 }
 
 export const fieldBoxClass =
-  'rounded border border-basalt-line bg-basalt-raised px-2 py-1 text-[13px] text-mist tabular-nums transition-colors hover:border-mist-muted focus-visible:border-gauge disabled:cursor-not-allowed disabled:opacity-50'
+  'rounded-md border border-line bg-surface px-2 py-1 text-[13px] text-ink tabular-nums transition-colors hover:border-ink-muted focus-visible:border-accent disabled:cursor-not-allowed disabled:opacity-50'
 
 const stepperClass =
-  'flex w-7 items-center justify-center text-base text-mist-muted transition-colors hover:bg-basalt-line hover:text-mist disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent'
+  'flex w-7 items-center justify-center text-base text-ink-muted transition-colors hover:bg-sunken hover:text-ink disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent'
 
 /** A labelled number box between -/+ steppers. */
 export function NumberField({
@@ -49,10 +49,10 @@ export function NumberField({
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between gap-2">
-        <label htmlFor={id} className="text-[13px] font-medium text-mist">
+        <label htmlFor={id} className="text-[13px] font-medium text-ink">
           {label}
         </label>
-        <div className="flex h-7 overflow-hidden rounded border border-basalt-line bg-basalt-raised">
+        <div className="flex h-7 overflow-hidden rounded-md border border-line bg-surface">
           <button
             type="button"
             onClick={() => nudge(-1)}
@@ -62,7 +62,7 @@ export function NumberField({
           >
             −
           </button>
-          <div className="flex items-center border-x border-basalt-line">
+          <div className="flex items-center border-x border-line">
             <input
               id={id}
               type="number"
@@ -73,9 +73,9 @@ export function NumberField({
               disabled={disabled}
               onChange={(e) => onChange(Number(e.target.value))}
               aria-describedby={describedBy}
-              className="w-16 bg-transparent px-1.5 text-right text-[13px] text-mist tabular-nums outline-none disabled:opacity-50"
+              className="w-16 bg-transparent px-1.5 text-right text-[13px] text-ink tabular-nums outline-none disabled:opacity-50"
             />
-            {unit && <span className="pr-1.5 text-xs text-mist-muted">{unit}</span>}
+            {unit && <span className="pr-1.5 text-xs text-ink-muted">{unit}</span>}
           </div>
           <button
             type="button"

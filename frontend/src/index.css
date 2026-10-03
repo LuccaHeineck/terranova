@@ -1,36 +1,109 @@
 @import "tailwindcss";
 
 /*
- * "Basalt & gauge": dark basalt chrome (the Taquari valley walls are Serra Geral basalt) around the light map,
- * with a river staff-gauge yellow for whatever is active or actionable. The map's own colors (depth ramp, fast
- * extent, seed marker) live in rendering/ and are never reused as chrome.
+ * Visual experiment: semantic tokens with switchable palettes (see theme.ts and the top bar's theme picker).
+ *
+ * - "Paper" (default): a warm cartographic paper chrome that sits quietly next to the light basemap, ink text,
+ *   and a deep Taquari teal reserved for the one thing to press or the one value that is selected.
+ * - "Night": the same layout on a deep slate, with an aqua accent.
+ * - "Basalt": the original dark basalt + staff-gauge yellow colors, for comparison.
+ *
+ * The map's own colors (depth ramp, fast extent, agreement, seed marker) live in rendering/ and are never
+ * reused as chrome. `text-canvas` doubles as "text on the accent": every palette's accent contrasts with its
+ * canvas.
  */
 @theme {
-  --color-basalt: #1d2427;
-  --color-basalt-raised: #273034;
-  --color-basalt-line: #3a4549;
-  --color-mist: #e4e9e7;
-  --color-mist-muted: #93a19f;
-  --color-gauge: #e9c23a;
-  --color-gauge-strong: #f3d35e;
-  --color-ochre: #d9a35b;
-  --color-danger: #e5484d;
+  --color-canvas: #f4f3ef;
+  --color-surface: #ffffff;
+  --color-sunken: #eae8e1;
+  --color-line: #dcd9cf;
+  --color-ink: #1b2328;
+  --color-ink-muted: #6a747a;
+  --color-accent: #0f6b66;
+  --color-accent-strong: #0b5551;
+  --color-live: #d97706;
+  --color-warn: #b45309;
+  --color-danger: #c62828;
 
-  --font-sans: 'Barlow', ui-sans-serif, system-ui, sans-serif;
-  --font-display: 'Barlow Semi Condensed', 'Barlow', ui-sans-serif, system-ui, sans-serif;
+  --font-sans: 'Instrument Sans Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Instrument Sans Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-serif: 'Instrument Serif', ui-serif, Georgia, serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, monospace;
+}
+
+:root {
+  color-scheme: light;
+  --shadow-float: 0 1px 2px rgb(20 28 32 / 0.06), 0 6px 20px rgb(20 28 32 / 0.1);
+}
+
+:root[data-theme='night'] {
+  color-scheme: dark;
+  --color-canvas: #0e1316;
+  --color-surface: #161d21;
+  --color-sunken: #0a0e10;
+  --color-line: #263136;
+  --color-ink: #e4ebe9;
+  --color-ink-muted: #8b9b9d;
+  --color-accent: #4fd1c0;
+  --color-accent-strong: #82e2d5;
+  --color-live: #f5b83d;
+  --color-warn: #e0a458;
+  --color-danger: #f0616a;
+  --shadow-float: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px rgb(0 0 0 / 0.35);
+}
+
+:root[data-theme='basalt'] {
+  color-scheme: dark;
+  --color-canvas: #1d2427;
+  --color-surface: #273034;
+  --color-sunken: #151b1d;
+  --color-line: #3a4549;
+  --color-ink: #e4e9e7;
+  --color-ink-muted: #93a19f;
+  --color-accent: #e9c23a;
+  --color-accent-strong: #f3d35e;
+  --color-live: #e9c23a;
+  --color-warn: #d9a35b;
+  --color-danger: #e5484d;
+  --shadow-float: 0 2px 8px rgb(0 0 0 / 0.25);
+}
+
+/* A card floating over the map: the same surface as the panels, lifted by a soft shadow and a hairline. */
+@utility float-card {
+  background: color-mix(in srgb, var(--color-surface) 94%, transparent);
+  box-shadow: var(--shadow-float), 0 0 0 1px color-mix(in srgb, var(--color-line) 80%, transparent);
+  backdrop-filter: blur(8px);
 }
 
 body {
   margin: 0;
-  background: var(--color-basalt);
-  color: var(--color-mist);
+  background: var(--color-canvas);
+  color: var(--color-ink);
   font-family: var(--font-sans);
+  font-size: 14px;
   -webkit-font-smoothing: antialiased;
+  font-feature-settings: 'ss01', 'cv11';
+}
+
+/* Headings in a slightly narrower cut of the body face: same family, tighter, so titles read as titles. */
+.font-display {
+  font-stretch: 92%;
+  letter-spacing: -0.005em;
+}
+.font-serif {
+  letter-spacing: 0;
+  font-weight: 400;
 }
 
 :focus-visible {
-  outline: 2px solid var(--color-gauge);
+  outline: 2px solid var(--color-accent);
   outline-offset: 2px;
+}
+
+/* Thin, quiet scrollbars for the panels. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line) transparent;
 }
 
 /* Number boxes have their own steppers (ui/NumberField) or a slider beside them. */
@@ -46,7 +119,7 @@ input[type='number']::-webkit-outer-spin-button {
 
 /*
  * Range inputs. `--fill` (0-100%) is set inline to the thumb's position, so the track left of the thumb fills.
- * `.range` is the quiet field slider; `.range-ruler` is the timeline's staff-gauge ruler, the one bold element.
+ * `.range` is the quiet field slider; `.range-ruler` is the timeline's scrubber.
  */
 .range,
 .range-ruler {
@@ -66,7 +139,7 @@ input[type='number']::-webkit-outer-spin-button {
 }
 
 .range {
-  --track: linear-gradient(to right, var(--color-gauge) 0 var(--fill, 0%), var(--color-basalt-line) var(--fill, 0%) 100%);
+  --track: linear-gradient(to right, var(--color-accent) 0 var(--fill, 0%), var(--color-line) var(--fill, 0%) 100%);
   height: 18px;
 }
 .range::-webkit-slider-runnable-track {
@@ -81,87 +154,89 @@ input[type='number']::-webkit-outer-spin-button {
 }
 .range::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
-  margin-top: -5px;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;
   border-radius: 50%;
-  background: var(--color-gauge);
-  border: 3px solid var(--color-basalt);
-  box-shadow: 0 0 0 1px var(--color-gauge);
+  background: var(--color-surface);
+  border: 2px solid var(--color-accent);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.2);
 }
 .range::-moz-range-thumb {
-  width: 8px;
-  height: 8px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
-  background: var(--color-gauge);
-  border: 3px solid var(--color-basalt);
-  box-shadow: 0 0 0 1px var(--color-gauge);
+  background: var(--color-surface);
+  border: 2px solid var(--color-accent);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.2);
 }
 
 .range-ruler {
-  /* Major ticks every 10%, minor every 2% along the bottom edge, and the passed part washed in gauge yellow. */
+  /* Light ticks every 10% along the bottom edge, and the played part washed in the accent. */
   --track:
-    repeating-linear-gradient(to right, var(--color-mist-muted) 0 1px, transparent 1px 10%) left bottom / 100% 10px no-repeat,
-    repeating-linear-gradient(to right, var(--color-basalt-line) 0 1px, transparent 1px 2%) left bottom / 100% 5px no-repeat,
-    linear-gradient(to right, rgb(233 194 58 / 0.22) 0 var(--fill, 0%), transparent var(--fill, 0%) 100%),
-    var(--color-basalt-raised);
-  height: 26px;
+    repeating-linear-gradient(to right, var(--color-ink-muted) 0 1px, transparent 1px 10%) left bottom / 100% 6px no-repeat,
+    linear-gradient(to right, color-mix(in srgb, var(--color-accent) 22%, transparent) 0 var(--fill, 0%), transparent var(--fill, 0%) 100%),
+    var(--color-sunken);
+  height: 24px;
 }
 .range-ruler::-webkit-slider-runnable-track {
-  height: 22px;
-  border-radius: 2px;
-  border-bottom: 1px solid var(--color-mist-muted);
+  height: 20px;
+  border-radius: 6px;
   background: var(--track);
 }
 .range-ruler::-moz-range-track {
-  height: 22px;
-  border-radius: 2px;
-  border-bottom: 1px solid var(--color-mist-muted);
+  height: 20px;
+  border-radius: 6px;
   background: var(--track);
 }
 .range-ruler::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 5px;
-  height: 28px;
+  width: 4px;
+  height: 26px;
   margin-top: -3px;
-  border-radius: 1px;
-  background: var(--color-gauge);
-  box-shadow: 0 0 0 2px var(--color-basalt);
+  border-radius: 2px;
+  background: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-surface);
 }
 .range-ruler::-moz-range-thumb {
-  width: 5px;
-  height: 28px;
+  width: 4px;
+  height: 26px;
   border: 0;
-  border-radius: 1px;
-  background: var(--color-gauge);
-  box-shadow: 0 0 0 2px var(--color-basalt);
+  border-radius: 2px;
+  background: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-surface);
 }
 
 /* Leaflet's own controls, in the chrome's colors. */
 .leaflet-container {
   font-family: var(--font-sans);
+  background: var(--color-sunken);
 }
 .leaflet-bar {
-  border: 1px solid var(--color-basalt-line) !important;
-  box-shadow: 0 2px 8px rgb(0 0 0 / 0.25) !important;
+  border: 0 !important;
+  border-radius: 10px !important;
+  overflow: hidden;
+  box-shadow: var(--shadow-float), 0 0 0 1px color-mix(in srgb, var(--color-line) 80%, transparent) !important;
 }
 .leaflet-bar a,
 .leaflet-bar a:hover {
-  background: var(--color-basalt);
-  color: var(--color-mist);
-  border-bottom-color: var(--color-basalt-line);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  border-bottom-color: var(--color-line);
 }
 .leaflet-bar a:hover {
-  background: var(--color-basalt-raised);
+  background: var(--color-sunken);
 }
 .leaflet-bar a.leaflet-disabled {
-  background: var(--color-basalt);
-  color: var(--color-basalt-line);
+  background: var(--color-surface);
+  color: var(--color-line);
 }
 .leaflet-control-attribution.leaflet-control {
-  background: rgb(29 36 39 / 0.8);
-  color: var(--color-mist-muted);
+  background: color-mix(in srgb, var(--color-surface) 80%, transparent);
+  color: var(--color-ink-muted);
+  border-top-left-radius: 6px;
+  font-size: 10px;
 }
 .leaflet-control-attribution a {
-  color: var(--color-mist);
+  color: var(--color-ink);
 }

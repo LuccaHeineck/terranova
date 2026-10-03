@@ -11,16 +11,16 @@ interface SectionProps {
   children: ReactNode
 }
 
-const frame = 'border-t border-basalt-line pt-4 first:border-t-0 first:pt-0'
-const titleClass = 'font-display text-[15px] font-semibold text-mist'
+const frame = ''
+const titleClass = 'text-[11px] font-semibold tracking-wider text-ink-muted uppercase'
 
-/** One titled group of the sidebar, separated from the previous one by a hairline. */
+/** One titled group of the sidebar under a small-caps label; the panel's gap separates the groups. */
 export function Section({ title, collapsible, defaultOpen, aside, children }: SectionProps) {
   if (collapsible) {
     return (
       <details open={defaultOpen} className={`group/section ${frame}`}>
         <summary className="flex cursor-pointer list-none items-center gap-1.5 rounded [&::-webkit-details-marker]:hidden">
-          <IconChevron className="-ml-1 h-4 w-4 text-mist-muted transition-transform group-open/section:rotate-90" />
+          <IconChevron className="-ml-1 h-3.5 w-3.5 text-ink-muted transition-transform group-open/section:rotate-90" />
           <span className={titleClass}>{title}</span>
           {aside}
         </summary>
