@@ -220,19 +220,31 @@ grid's true outline comes from `GET /grids` so clicks outside it are rejected be
 converts the marker's lat/lon to a cell itself (`ingestion/dem.py`'s `lonlat_to_cell`, through the grid's real
 UTM transform), rejecting an outside point with a 422.
 
-The shell (`App.tsx`) is a top bar (`TopBar`: run status and the Start/Stop button, which submits the setup
-form from outside it through `form="run-setup"`) above a left menu (`Sidebar`: an icon rail with Setup /
-Results / Log tabs, and an About item at its foot) and the map. Every tab panel stays mounted and is only hidden:
-`ConfigPanel` keeps its fields in local state, which would reset on unmount, and Start needs the form to exist.
-Starting a run switches to Results; the panel collapses (the active rail item or the rail's panel button toggles
-it) to give the map the full width, and below 900px it is a drawer over the map. About is a page, not a panel:
-`AboutPage` (project introduction and user guide) covers the map, which stays mounted and `inert` under it so a
-run keeps streaming. Its quoted results (CSI, run times) are hand-kept constants at the top of the file. Visual tokens (the "basalt" chrome colors, gauge
-yellow accent, Barlow / Barlow Semi Condensed type self-hosted via `@fontsource`) are a Tailwind `@theme` in
-`src/index.css`, along with the range-input styling (the timeline's ruler track) and Leaflet control overrides.
-`src/components/ui/` holds the small presentational form primitives (segmented control, option card, slider
-field, number field, toggle, section, callout, inline SVG icons); they hold no simulation logic. The map's own
-colors (depth ramp, fast extent, seed marker) stay in `rendering/` and are not chrome tokens.
+The shell (`App.tsx`) is a top bar (`TopBar`: panel toggle, run status, About, a quiet language menu and the
+Start/Stop button, which submits the setup form from outside it through `form="run-setup"`) above a left panel
+(`Sidebar`: Setup / Results / Log tabs over the selected tab's content) and the map, an inset card beside it.
+Every tab panel stays mounted and is only hidden: `ConfigPanel` keeps its fields in local state, which would reset
+on unmount, and Start needs the form to exist. Starting a run switches to Results; the top bar's panel button
+collapses the panel to give the map the full width, and below 900px it is a drawer over the map. The map's view
+switch (Temporal / Fast / Compare, and the temporal product under it) sits at its top center; one Layers menu
+holds the basemap, the observed / terrain / roughness overlays and the overlay opacity, next to an Export menu.
+About is a page, not a panel: `AboutPage` (project introduction and user guide) covers the map, which stays
+mounted and `inert` under it so a run keeps streaming. Its quoted results (CSI, run times) are hand-kept constants
+in `components/about/content.ts`.
+
+All UI text is in `src/i18n/`: one message catalogue per language (`en.ts`, and `pt-BR.ts` typed against it, so a
+missing translation fails the build), a tiny store for the current language (`?lang=` in the URL or the top bar's
+language menu, remembered per browser), and `format.ts`, which formats numbers in that language's separators.
+Components read strings through `useI18n()`; code outside React (log lines, export legends, notices) calls
+`messages()` when it builds the string. The About page's prose is one copy object per language in
+`components/about/copy.*.tsx`, laid out by `AboutPage`.
+
+Visual tokens (the "basalt" chrome colors, gauge-yellow accent, Geist / Geist Mono self-hosted via `@fontsource`)
+are a Tailwind `@theme` in `src/index.css`, along with the short appear animations (`anim-pop`, `anim-panel`,
+`anim-fade`, off under `prefers-reduced-motion`), the range-input styling (the timeline's ruler track) and Leaflet
+control overrides. `src/components/ui/` holds the small presentational primitives (segmented control, option card,
+slider field, number field, toggle, section, callout, popover, inline SVG icons); they hold no simulation logic.
+The map's own colors (depth ramp, fast extent, seed marker) stay in `rendering/` and are not chrome tokens.
 
 The map's background is chosen from `src/geo/basemaps.ts` (Relief, Topographic, Streets, Satellite; remembered
 per browser in `localStorage`): each basemap is a base tile layer, optionally Esri's hillshade multiplied over it

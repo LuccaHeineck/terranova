@@ -143,11 +143,11 @@ export const IconLayers = (props: SVGProps<SVGSVGElement>) => (
   </Icon>
 )
 
-/** Theme: a half-filled circle. */
-export const IconTheme = (props: SVGProps<SVGSVGElement>) => (
+/** Language: a globe. */
+export const IconGlobe = (props: SVGProps<SVGSVGElement>) => (
   <Icon {...props}>
-    <circle cx="10" cy="10" r="6.5" />
-    <path d="M10 3.5a6.5 6.5 0 0 1 0 13z" fill="currentColor" />
+    <circle cx="10" cy="10" r="7" />
+    <path d="M3 10h14M10 3c2 2.2 2.8 4.5 2.8 7s-.8 4.8-2.8 7c-2-2.2-2.8-4.5-2.8-7S8 5.2 10 3z" />
   </Icon>
 )
 

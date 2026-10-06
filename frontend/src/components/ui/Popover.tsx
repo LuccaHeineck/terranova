@@ -51,7 +51,7 @@ export function Popover({ trigger, label, triggerClassName, align = 'right', abo
       {open && (
         <div
           id={panelId}
-          className={`float-card absolute z-1200 min-w-56 rounded-xl p-1.5 text-ink ${align === 'right' ? 'right-0' : 'left-0'} ${
+          className={`float-card anim-pop absolute z-1200 min-w-56 rounded-xl p-1.5 text-ink ${align === 'right' ? 'right-0 origin-top-right' : 'left-0 origin-top-left'} ${
             above ? 'bottom-full mb-2' : 'top-full mt-2'
           }`}
         >

@@ -24,8 +24,8 @@ const SCALE = 2
 const PAD = 14
 const FOOTER_TEXT = '#1d2427'
 const FOOTER_MUTED = '#5b6866'
-const FONT = "'Instrument Sans Variable', ui-sans-serif, system-ui, sans-serif"
-const DISPLAY_FONT = "'Instrument Sans Variable', ui-sans-serif, system-ui, sans-serif"
+const FONT = "'Geist Variable', ui-sans-serif, system-ui, sans-serif"
+const DISPLAY_FONT = FONT
 
 function loadImage(src: string, crossOrigin: boolean): Promise<HTMLImageElement | null> {
   return new Promise((resolve) => {

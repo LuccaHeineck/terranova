@@ -287,7 +287,7 @@ export function MapPane({
       <div ref={containerRef} className="h-full w-full" />
       {/* The pane's name sits on top of its key, bottom left: the top edge belongs to the view switcher. */}
       {(label || legend) && (
-        <div className="absolute bottom-3 left-3 z-1000 flex flex-col items-start gap-2">
+        <div className="anim-fade absolute bottom-3 left-3 z-1000 flex flex-col items-start gap-2">
           {label && (
             <div className="float-card pointer-events-none rounded-lg px-2.5 py-1 text-[13px] font-semibold text-ink tabular-nums">
               {label}

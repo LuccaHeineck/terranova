@@ -1,13 +1,11 @@
 import type { Resolution } from '../types/simulation'
 import type { SimulationStatus } from '../hooks/useSimulationRun'
 import { LOCALES, useI18n } from '../i18n'
-import { THEMES } from '../theme'
-import type { ThemeId } from '../theme'
 import { RUN_SETUP_FORM_ID } from './ConfigPanel'
 import { PANEL_ID } from './Sidebar'
 import type { Page } from './Sidebar'
 import { Popover, PopoverHeading } from './ui/Popover'
-import { IconAbout, IconCheck, IconPanel, IconPlay, IconStop, IconTheme } from './ui/icons'
+import { IconAbout, IconCheck, IconGlobe, IconPanel, IconPlay, IconStop } from './ui/icons'
 
 interface TopBarProps {
   status: SimulationStatus
@@ -20,8 +18,6 @@ interface TopBarProps {
   onTogglePanel: () => void
   page: Page
   onPage: (page: Page) => void
-  theme: ThemeId
-  onTheme: (theme: ThemeId) => void
 }
 
 // Idle says nothing worth a pill: the status only shows once a run has started.
@@ -36,62 +32,33 @@ const STATUS_DOT: Record<Exclude<SimulationStatus, 'idle'>, string> = {
 const iconButton =
   'flex h-9 w-9 items-center justify-center rounded-lg text-ink-muted transition-colors hover:bg-sunken hover:text-ink'
 
-/**
- * Theme and, tucked under it, the language: a quiet menu behind the half-circle icon, since neither is something
- * to change mid-demo. `?theme=` and `?lang=` in the URL do the same.
- */
-function DisplayMenu({ theme, onTheme }: { theme: ThemeId; onTheme: (theme: ThemeId) => void }) {
+/** The UI language, tucked behind a quiet globe button: not something to change mid-demo. `?lang=` does the same. */
+function LanguageMenu() {
   const { t, locale, setLocale } = useI18n()
   return (
-    <Popover label={t.topBar.display} triggerClassName={iconButton} trigger={() => <IconTheme className="h-[18px] w-[18px]" />}>
-      <PopoverHeading>{t.topBar.theme}</PopoverHeading>
-      <div role="radiogroup" aria-label={t.topBar.theme} className="flex flex-col">
-        {THEMES.map(({ id, swatch: [bg, accent] }) => (
+    <Popover label={t.topBar.language} triggerClassName={iconButton} trigger={() => <IconGlobe className="h-[18px] w-[18px]" />}>
+      <PopoverHeading>{t.topBar.language}</PopoverHeading>
+      <div role="radiogroup" aria-label={t.topBar.language} className="flex flex-col">
+        {LOCALES.map(({ id, label }) => (
           <button
             key={id}
             type="button"
             role="radio"
-            aria-checked={theme === id}
-            onClick={() => onTheme(id)}
+            aria-checked={locale === id}
+            lang={id}
+            onClick={() => setLocale(id)}
             className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-[13px] hover:bg-sunken"
           >
-            <span
-              aria-hidden="true"
-              className="h-4 w-4 shrink-0 rounded-full ring-1 ring-line"
-              style={{ background: `linear-gradient(135deg, ${bg} 0 50%, ${accent} 50% 100%)` }}
-            />
-            <span className="flex-1">{t.topBar.themes[id]}</span>
-            {theme === id && <IconCheck className="h-4 w-4 text-accent" />}
+            <span className="flex-1">{label}</span>
+            {locale === id && <IconCheck className="h-4 w-4 text-accent" />}
           </button>
         ))}
-      </div>
-      <div className="mx-2 mt-1 flex items-center justify-between gap-3 border-t border-line pt-2 pb-1">
-        <span className="text-[11px] text-ink-muted">{t.topBar.language}</span>
-        <div role="radiogroup" aria-label={t.topBar.language} className="flex gap-0.5 text-[11px]">
-          {LOCALES.map(({ id, label, short }) => (
-            <button
-              key={id}
-              type="button"
-              role="radio"
-              aria-checked={locale === id}
-              aria-label={label}
-              title={label}
-              lang={id}
-              onClick={() => setLocale(id)}
-              className={`rounded px-1.5 py-0.5 font-semibold tracking-wide transition-colors ${
-                locale === id ? 'bg-sunken text-ink' : 'text-ink-muted hover:text-ink'
-              }`}
-            >
-              {short}
-            </button>
-          ))}
-        </div>
       </div>
     </Popover>
   )
 }
 
-/** Panel toggle, wordmark, run status, About, display, and the one primary action: Start, or Stop while running. */
+/** Panel toggle, wordmark, run status, About, language, and the one primary action: Start, or Stop while running. */
 export function TopBar({
   status,
   gridShape,
@@ -101,8 +68,6 @@ export function TopBar({
   onTogglePanel,
   page,
   onPage,
-  theme,
-  onTheme,
 }: TopBarProps) {
   const { t } = useI18n()
   const busy = status === 'starting' || status === 'streaming'
@@ -151,7 +116,7 @@ export function TopBar({
           <IconAbout className="h-[18px] w-[18px]" />
           <span className="hidden sm:inline">{t.topBar.about}</span>
         </button>
-        <DisplayMenu theme={theme} onTheme={onTheme} />
+        <LanguageMenu />
 
         {/* Distinct keys: if React reused one <button> and flipped its type from "button" to "submit"
             during the Stop click, the click's default action would submit the form and start a new run. */}

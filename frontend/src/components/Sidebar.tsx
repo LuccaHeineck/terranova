@@ -60,7 +60,7 @@ export function Sidebar({ tab, onTab, page, onPage, open, onOpenChange, badges, 
       aria-label={t.sidebar.panels}
       className={`${
         shown ? 'flex' : 'hidden'
-      } absolute inset-y-0 left-0 z-1100 w-[320px] max-w-[calc(100vw-1rem)] flex-col rounded-r-xl bg-canvas shadow-2xl min-[900px]:static min-[900px]:z-auto min-[900px]:shrink-0 min-[900px]:rounded-none min-[900px]:shadow-none`}
+      } anim-panel absolute inset-y-0 left-0 z-1100 w-[320px] max-w-[calc(100vw-1rem)] flex-col rounded-r-xl bg-canvas shadow-2xl min-[900px]:static min-[900px]:z-auto min-[900px]:shrink-0 min-[900px]:rounded-none min-[900px]:shadow-none`}
     >
       <div className="flex items-center gap-1 px-3 pt-1 pb-3">
         <div role="tablist" aria-label={t.sidebar.panels} className="grid flex-1 grid-cols-3 gap-0.5 rounded-lg bg-sunken p-0.5">
@@ -103,7 +103,7 @@ export function Sidebar({ tab, onTab, page, onPage, open, onOpenChange, badges, 
         </button>
       </div>
       {TABS.map(({ tab: id }) => (
-        <div key={id} role="tabpanel" hidden={id !== tab} className="flex min-h-0 flex-1 flex-col">
+        <div key={id} role="tabpanel" hidden={id !== tab} className="anim-fade flex min-h-0 flex-1 flex-col">
           {panels[id]}
         </div>
       ))}

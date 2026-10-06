@@ -616,7 +616,7 @@ export function FloodMap({
 
       {/* The timeline sits under the temporal pane only: the fast mode has a single frame to show. */}
       {showsTemporal && timeline.frame && (
-        <div className={`grid w-full ${compare ? 'grid-cols-2 gap-px bg-line' : 'grid-cols-1'}`}>
+        <div className={`anim-fade grid w-full ${compare ? 'grid-cols-2 gap-px bg-line' : 'grid-cols-1'}`}>
           <Timeline timeline={timeline} compare={compare} />
           {compare && (
             <div className="flex items-center justify-center border-t border-line bg-surface p-3 text-center text-xs text-ink-muted">
@@ -629,7 +629,7 @@ export function FloodMap({
       {exportNotice && (
         <div
           role="status"
-          className="float-card pointer-events-none absolute bottom-24 left-1/2 z-1000 max-w-[90%] -translate-x-1/2 rounded-lg border-l-2 border-accent px-3 py-1.5 text-xs font-medium text-ink"
+          className="float-card anim-pop pointer-events-none absolute bottom-24 left-1/2 z-1000 max-w-[90%] -translate-x-1/2 rounded-lg border-l-2 border-accent px-3 py-1.5 text-xs font-medium text-ink"
         >
           {exportNotice}
         </div>
@@ -637,7 +637,7 @@ export function FloodMap({
 
       {/* Top center: what is drawn. The view, then (for the temporal pane) which of its products. */}
       {(available.temporal || available.fast || seedNotice) && (
-        <div className="absolute top-3 left-1/2 z-1000 flex -translate-x-1/2 flex-col items-center gap-1.5">
+        <div className="anim-fade absolute top-3 left-1/2 z-1000 flex -translate-x-1/2 flex-col items-center gap-1.5">
           {(available.temporal || available.fast) && (
           <div role="group" aria-label={t.map.mapView} className="float-card flex gap-0.5 rounded-xl p-1 text-[13px]">
             {VIEWS.map((v) => (

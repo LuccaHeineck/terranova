@@ -195,7 +195,7 @@ export function CellInspector({ cell, inputs, temporal, fast, compare, onClose }
   const z = inputs ? inputs.elevation[index] : 0
 
   return (
-    <div className="float-card max-h-full w-64 overflow-y-auto rounded-xl px-3 py-2.5 text-xs text-ink">
+    <div className="float-card anim-pop max-h-full w-64 overflow-y-auto rounded-xl px-3 py-2.5 text-xs text-ink">
       <div className="flex items-start justify-between gap-2">
         <div>
           <h2 className="text-[13px] font-semibold">{t.inspector.title}</h2>
