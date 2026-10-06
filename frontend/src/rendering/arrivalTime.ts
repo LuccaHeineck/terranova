@@ -1,3 +1,4 @@
+import { int, upTo } from '../i18n'
 import type { FirstWetGrid, FirstWetUnit } from './firstWet'
 import { hexToRgba, paint } from './paint'
 
@@ -49,7 +50,7 @@ export function arrivalBands(span: number, unit: FirstWetUnit): ArrivalBand[] {
 
 /** "0–24 h" / "≥ 120 h", or engine steps for a seeded pool. */
 export function arrivalBandLabel({ min, max }: ArrivalBand, unit: FirstWetUnit): string {
-  const fmt = (v: number) => (unit === 'seconds' ? `${v / 3600}` : v.toLocaleString('en-US'))
+  const fmt = (v: number) => (unit === 'seconds' ? upTo(v / 3600, 2) : int(v))
   const suffix = unit === 'seconds' ? ' h' : ''
   return max === null ? `≥ ${fmt(min)}${suffix}` : `${fmt(min)}–${fmt(max)}${suffix}`
 }

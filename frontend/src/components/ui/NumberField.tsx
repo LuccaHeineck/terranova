@@ -1,5 +1,6 @@
 import { useId } from 'react'
 import type { ReactNode } from 'react'
+import { useI18n } from '../../i18n'
 
 interface NumberFieldProps {
   label: string
@@ -40,6 +41,7 @@ export function NumberField({
   children,
 }: NumberFieldProps) {
   const id = useId()
+  const { t } = useI18n()
   const nudge = (direction: 1 | -1) => {
     let next = value + direction * stepBy
     if (min !== undefined) next = Math.max(min, next)
@@ -57,7 +59,7 @@ export function NumberField({
             type="button"
             onClick={() => nudge(-1)}
             disabled={disabled || (min !== undefined && value <= min)}
-            aria-label={`Decrease ${label.toLowerCase()}`}
+            aria-label={t.fields.decrease(label)}
             className={stepperClass}
           >
             −
@@ -81,7 +83,7 @@ export function NumberField({
             type="button"
             onClick={() => nudge(1)}
             disabled={disabled || (max !== undefined && value >= max)}
-            aria-label={`Increase ${label.toLowerCase()}`}
+            aria-label={t.fields.increase(label)}
             className={stepperClass}
           >
             +

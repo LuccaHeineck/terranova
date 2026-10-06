@@ -1,5 +1,6 @@
 import type { Resolution } from '../types/simulation'
 import type { SimulationStatus } from '../hooks/useSimulationRun'
+import { LOCALES, useI18n } from '../i18n'
 import { THEMES } from '../theme'
 import type { ThemeId } from '../theme'
 import { RUN_SETUP_FORM_ID } from './ConfigPanel'
@@ -24,23 +25,28 @@ interface TopBarProps {
 }
 
 // Idle says nothing worth a pill: the status only shows once a run has started.
-const STATUS: Record<Exclude<SimulationStatus, 'idle'>, { label: string; dot: string }> = {
-  starting: { label: 'Starting…', dot: 'bg-live motion-safe:animate-pulse' },
-  streaming: { label: 'Running', dot: 'bg-live motion-safe:animate-pulse' },
-  done: { label: 'Done', dot: 'bg-accent' },
-  stopped: { label: 'Stopped', dot: 'bg-ink-muted' },
-  error: { label: 'Error', dot: 'bg-danger' },
+const STATUS_DOT: Record<Exclude<SimulationStatus, 'idle'>, string> = {
+  starting: 'bg-live motion-safe:animate-pulse',
+  streaming: 'bg-live motion-safe:animate-pulse',
+  done: 'bg-accent',
+  stopped: 'bg-ink-muted',
+  error: 'bg-danger',
 }
 
 const iconButton =
   'flex h-9 w-9 items-center justify-center rounded-lg text-ink-muted transition-colors hover:bg-sunken hover:text-ink'
 
-function ThemePicker({ theme, onTheme }: { theme: ThemeId; onTheme: (theme: ThemeId) => void }) {
+/**
+ * Theme and, tucked under it, the language: a quiet menu behind the half-circle icon, since neither is something
+ * to change mid-demo. `?theme=` and `?lang=` in the URL do the same.
+ */
+function DisplayMenu({ theme, onTheme }: { theme: ThemeId; onTheme: (theme: ThemeId) => void }) {
+  const { t, locale, setLocale } = useI18n()
   return (
-    <Popover label="Theme" triggerClassName={iconButton} trigger={() => <IconTheme className="h-[18px] w-[18px]" />}>
-      <PopoverHeading>Theme</PopoverHeading>
-      <div role="radiogroup" aria-label="Theme" className="flex flex-col">
-        {THEMES.map(({ id, label, swatch: [bg, accent] }) => (
+    <Popover label={t.topBar.display} triggerClassName={iconButton} trigger={() => <IconTheme className="h-[18px] w-[18px]" />}>
+      <PopoverHeading>{t.topBar.theme}</PopoverHeading>
+      <div role="radiogroup" aria-label={t.topBar.theme} className="flex flex-col">
+        {THEMES.map(({ id, swatch: [bg, accent] }) => (
           <button
             key={id}
             type="button"
@@ -54,16 +60,38 @@ function ThemePicker({ theme, onTheme }: { theme: ThemeId; onTheme: (theme: Them
               className="h-4 w-4 shrink-0 rounded-full ring-1 ring-line"
               style={{ background: `linear-gradient(135deg, ${bg} 0 50%, ${accent} 50% 100%)` }}
             />
-            <span className="flex-1">{label}</span>
+            <span className="flex-1">{t.topBar.themes[id]}</span>
             {theme === id && <IconCheck className="h-4 w-4 text-accent" />}
           </button>
         ))}
+      </div>
+      <div className="mx-2 mt-1 flex items-center justify-between gap-3 border-t border-line pt-2 pb-1">
+        <span className="text-[11px] text-ink-muted">{t.topBar.language}</span>
+        <div role="radiogroup" aria-label={t.topBar.language} className="flex gap-0.5 text-[11px]">
+          {LOCALES.map(({ id, label, short }) => (
+            <button
+              key={id}
+              type="button"
+              role="radio"
+              aria-checked={locale === id}
+              aria-label={label}
+              title={label}
+              lang={id}
+              onClick={() => setLocale(id)}
+              className={`rounded px-1.5 py-0.5 font-semibold tracking-wide transition-colors ${
+                locale === id ? 'bg-sunken text-ink' : 'text-ink-muted hover:text-ink'
+              }`}
+            >
+              {short}
+            </button>
+          ))}
+        </div>
       </div>
     </Popover>
   )
 }
 
-/** Panel toggle, wordmark, run status, About, theme, and the one primary action: Start, or Stop while running. */
+/** Panel toggle, wordmark, run status, About, display, and the one primary action: Start, or Stop while running. */
 export function TopBar({
   status,
   gridShape,
@@ -76,8 +104,9 @@ export function TopBar({
   theme,
   onTheme,
 }: TopBarProps) {
+  const { t } = useI18n()
   const busy = status === 'starting' || status === 'streaming'
-  const shownStatus = status === 'idle' ? null : STATUS[status]
+  const shownStatus = status === 'idle' ? null : { label: t.topBar.status[status], dot: STATUS_DOT[status] }
 
   return (
     <header className="flex items-center gap-2 px-2 sm:gap-3 sm:px-3">
@@ -86,8 +115,8 @@ export function TopBar({
         onClick={onTogglePanel}
         aria-expanded={panelOpen}
         aria-controls={PANEL_ID}
-        aria-label={panelOpen ? 'Hide panel' : 'Show panel'}
-        title={panelOpen ? 'Hide panel' : 'Show panel'}
+        aria-label={panelOpen ? t.topBar.hidePanel : t.topBar.showPanel}
+        title={panelOpen ? t.topBar.hidePanel : t.topBar.showPanel}
         className={iconButton}
       >
         <IconPanel className={`h-[18px] w-[18px] transition-transform ${panelOpen ? '' : 'rotate-180'}`} />
@@ -95,13 +124,13 @@ export function TopBar({
 
       <div className="flex min-w-0 items-baseline gap-3">
         <span className="font-serif text-[26px] leading-none text-ink">Terranova</span>
-        <span className="hidden truncate text-[13px] text-ink-muted lg:inline">Flood simulation · Vale do Taquari</span>
+        <span className="hidden truncate text-[13px] text-ink-muted lg:inline">{t.topBar.tagline}</span>
       </div>
 
       <div className="ml-auto flex items-center gap-1.5 text-[13px] sm:gap-2">
         {gridShape && resolution && (
           <span className="mr-1 hidden text-ink-muted tabular-nums xl:inline">
-            {gridShape[0].toLocaleString('en-US')} × {gridShape[1].toLocaleString('en-US')} cells · {resolution} m
+            {t.topBar.gridInfo(gridShape[0], gridShape[1], resolution)}
           </span>
         )}
         {shownStatus && (
@@ -120,9 +149,9 @@ export function TopBar({
           }`}
         >
           <IconAbout className="h-[18px] w-[18px]" />
-          <span className="hidden sm:inline">About</span>
+          <span className="hidden sm:inline">{t.topBar.about}</span>
         </button>
-        <ThemePicker theme={theme} onTheme={onTheme} />
+        <DisplayMenu theme={theme} onTheme={onTheme} />
 
         {/* Distinct keys: if React reused one <button> and flipped its type from "button" to "submit"
             during the Stop click, the click's default action would submit the form and start a new run. */}
@@ -134,7 +163,7 @@ export function TopBar({
             className="ml-1 flex h-9 items-center gap-1.5 rounded-lg bg-surface px-3.5 font-semibold text-ink ring-1 ring-line transition-colors hover:bg-sunken"
           >
             <IconStop className="h-4 w-4 text-danger" />
-            Stop
+            {t.topBar.stop}
           </button>
         ) : (
           <button
@@ -145,7 +174,8 @@ export function TopBar({
           >
             <IconPlay className="h-4 w-4" />
             <span>
-              Start<span className="hidden sm:inline"> simulation</span>
+              {t.topBar.start}
+              <span className="hidden sm:inline">{t.topBar.startSuffix}</span>
             </span>
           </button>
         )}

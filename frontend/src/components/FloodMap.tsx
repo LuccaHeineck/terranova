@@ -46,6 +46,7 @@ import { MapPane } from './MapPane'
 import { Timeline } from './Timeline'
 import { Popover, PopoverHeading } from './ui/Popover'
 import { IconDownload, IconLayers } from './ui/icons'
+import { messages, useI18n } from '../i18n'
 
 type MapView = Engine | 'compare'
 
@@ -56,17 +57,7 @@ type MapView = Engine | 'compare'
  */
 type TemporalProduct = 'depth' | 'arrival' | 'maxDepth'
 
-const PRODUCT_LABEL: Record<TemporalProduct, string> = {
-  depth: 'Depth',
-  arrival: 'Arrival',
-  maxDepth: 'Max depth',
-}
-
-const PRODUCT_TITLE: Record<TemporalProduct, string> = {
-  depth: 'Water depth at the timeline frame',
-  arrival: 'When each cell first flooded, up to the timeline frame',
-  maxDepth: 'Deepest water each cell reached over the run',
-}
+const PRODUCTS: TemporalProduct[] = ['depth', 'arrival', 'maxDepth']
 
 interface FloodMapProps {
   bounds: Bounds | null
@@ -92,11 +83,7 @@ interface FloodMapProps {
   observed: ObservedMasks | null
 }
 
-const VIEW_LABEL: Record<MapView, string> = {
-  temporal: 'Temporal',
-  fast: 'Fast',
-  compare: 'Compare',
-}
+const VIEWS: MapView[] = ['temporal', 'fast', 'compare']
 
 /**
  * Which views can be drawn. A single view needs its engine's frame. Compare needs both layers and at least one
@@ -175,21 +162,9 @@ function LayerToggle({
 type InputLayer = 'off' | 'terrain' | 'roughness'
 
 /** The two input layers' toggles: one at a time, since both cover the whole grid. */
-const INPUT_LAYERS: { id: Exclude<InputLayer, 'off'>; label: string; title: string; hint: string; swatch: string }[] = [
-  {
-    id: 'terrain',
-    label: 'Terrain',
-    hint: 'Model DEM, the terrain Z',
-    title: "Model input: the model's own DEM, the terrain Z the automaton runs on",
-    swatch: `linear-gradient(to right, ${TERRAIN_GRADIENT.join(', ')})`,
-  },
-  {
-    id: 'roughness',
-    label: 'Roughness',
-    hint: "Manning's n from land cover",
-    title: "Model input: Manning's n from MapBiomas land cover, what slows the water",
-    swatch: `linear-gradient(to right, ${ROUGHNESS_GRADIENT.join(', ')})`,
-  },
+const INPUT_LAYERS: { id: Exclude<InputLayer, 'off'>; copy: 'terrainLayer' | 'roughnessLayer'; swatch: string }[] = [
+  { id: 'terrain', copy: 'terrainLayer', swatch: `linear-gradient(to right, ${TERRAIN_GRADIENT.join(', ')})` },
+  { id: 'roughness', copy: 'roughnessLayer', swatch: `linear-gradient(to right, ${ROUGHNESS_GRADIENT.join(', ')})` },
 ]
 
 const INPUT_LAYER_STORAGE_KEY = 'terranova.inputLayer'
@@ -218,14 +193,13 @@ function storedBasemap(): BasemapId {
 
 /** "Temporal CA", naming the neighborhood when it isn't the validated Moore one. */
 function temporalName(neighborhood: Neighborhood | undefined): string {
-  return !neighborhood || neighborhood === 'moore' ? 'Temporal CA' : `Temporal CA (${NEIGHBORHOOD_LABEL[neighborhood]})`
+  return messages().map.temporalName(!neighborhood || neighborhood === 'moore' ? null : NEIGHBORHOOD_LABEL[neighborhood])
 }
 
 /** When a frame is: "t = 12.3 h" for a gauge-driven run, "step 1,200" for a seeded pool. */
 function frameWhen(frame: CompactFrame): string {
-  return frame.elapsed_time !== undefined
-    ? `t = ${(frame.elapsed_time / 3600).toFixed(1)} h`
-    : `step ${frame.step.toLocaleString('en-US')}`
+  const { common } = messages()
+  return frame.elapsed_time !== undefined ? common.tHours(frame.elapsed_time / 3600) : common.step(frame.step)
 }
 
 function paneLabel(
@@ -234,10 +208,11 @@ function paneLabel(
   neighborhood?: Neighborhood,
   product: TemporalProduct = 'depth',
 ): string {
-  if (!frame) return engine === 'fast' ? 'Fast: computing…' : `${temporalName(neighborhood)}: starting…`
-  if (engine === 'fast') return 'Fast: steady peak extent'
-  if (product === 'maxDepth') return `${temporalName(neighborhood)}: maximum depth`
-  return `${temporalName(neighborhood)}: ${frameWhen(frame)}`
+  const { map } = messages()
+  if (!frame) return engine === 'fast' ? map.paneFastComputing : map.paneStarting(temporalName(neighborhood))
+  if (engine === 'fast') return map.paneFastSteady
+  if (product === 'maxDepth') return map.paneMaxDepth(temporalName(neighborhood))
+  return map.paneAt(temporalName(neighborhood), frameWhen(frame))
 }
 
 /** "2026-10-02", for the exported caption. */
@@ -338,6 +313,7 @@ export function FloodMap({
   seedNotice,
   observed,
 }: FloodMapProps) {
+  const { t } = useI18n()
   const [basemapId, setBasemapId] = useState<BasemapId>(storedBasemap)
   const selectBasemap = (id: BasemapId) => {
     setBasemapId(id)
@@ -475,7 +451,7 @@ export function FloodMap({
       return <ArrivalLegend bands={bands} unit={firstWet.unit} />
     }
     if (engine === 'temporal' && shownProduct === 'maxDepth') {
-      return <DepthLegend title="Maximum depth" note={timeline.live ? 'Over the run so far.' : 'Over the run.'} />
+      return <DepthLegend title={t.map.maxDepth} note={timeline.live ? t.map.maxDepthNoteLive : t.map.maxDepthNote} />
     }
     return LEGEND[engine]
   }
@@ -483,7 +459,7 @@ export function FloodMap({
     if (against) return agreementLegendSpec(against.stageM)
     if (engine === 'fast') return extentLegendSpec()
     if (shownProduct === 'arrival' && bands && firstWet) return arrivalLegendSpec(bands, firstWet.unit)
-    if (shownProduct === 'maxDepth') return depthLegendSpec('Maximum depth (m)', 'Over the run.')
+    if (shownProduct === 'maxDepth') return depthLegendSpec(t.legends.exportMaxDepth, t.map.maxDepthNote)
     return depthLegendSpec()
   }
   const inputLegend =
@@ -521,9 +497,9 @@ export function FloodMap({
   }
   const paneTitle = (engine: Engine) =>
     engine === 'fast'
-      ? 'Fast mode: steady peak extent'
+      ? t.map.exportFastTitle
       : `${paneLabel('temporal', timeline.frame, temporalLayer?.neighborhood, shownProduct)}. ${
-          against ? 'Against the observed May 2024 extent' : PRODUCT_TITLE[shownProduct]
+          against ? t.map.exportAgainstObserved : t.map.productTitles[shownProduct]
         }`
 
   const exportPng = async () => {
@@ -538,16 +514,12 @@ export function FloodMap({
           legend: exportLegendFor(engine),
           swatchOpacity: opacity,
         })),
-        `Terranova CA flood simulator, Vale do Taquari${resolution ? `, ${resolution} m grid` : ''}. Exported ${today()}.`,
+        t.map.exportCaption(resolution, today()),
       )
       download(snapshot.blob, `${fileStem()}.png`)
-      setExportNotice(
-        snapshot.missingTiles > 0
-          ? `Map saved, without ${snapshot.missingTiles} basemap tiles whose server blocks cross-origin reads.`
-          : 'Map saved as PNG.',
-      )
+      setExportNotice(snapshot.missingTiles > 0 ? t.map.pngMissingTiles(snapshot.missingTiles) : t.map.pngSaved)
     } catch (e) {
-      setExportNotice(`PNG export failed: ${e instanceof Error ? e.message : String(e)}`)
+      setExportNotice(t.map.pngFailed(e instanceof Error ? e.message : String(e)))
     } finally {
       setExporting(false)
     }
@@ -588,7 +560,7 @@ export function FloodMap({
     const footprintOnGrid = mapGrid && mapGrid.resolution === resolution ? mapGrid.footprint : null
     const geojson = extentsToGeoJson(features, footprintOnGrid, bounds)
     download(new Blob([JSON.stringify(geojson)], { type: 'application/geo+json' }), `${fileStem()}.geojson`)
-    setExportNotice('Flooded extent saved as GeoJSON (WGS84).')
+    setExportNotice(t.map.geojsonSaved)
   }
 
   return (
@@ -648,7 +620,7 @@ export function FloodMap({
           <Timeline timeline={timeline} compare={compare} />
           {compare && (
             <div className="flex items-center justify-center border-t border-line bg-surface p-3 text-center text-xs text-ink-muted">
-              Fast mode: one steady frame at the peak. It does not follow the timeline.
+              {t.map.compareFastNote}
             </div>
           )}
         </div>
@@ -667,20 +639,20 @@ export function FloodMap({
       {(available.temporal || available.fast || seedNotice) && (
         <div className="absolute top-3 left-1/2 z-1000 flex -translate-x-1/2 flex-col items-center gap-1.5">
           {(available.temporal || available.fast) && (
-          <div role="group" aria-label="Map view" className="float-card flex gap-0.5 rounded-xl p-1 text-[13px]">
-            {(Object.keys(VIEW_LABEL) as MapView[]).map((v) => (
+          <div role="group" aria-label={t.map.mapView} className="float-card flex gap-0.5 rounded-xl p-1 text-[13px]">
+            {VIEWS.map((v) => (
               <button
                 key={v}
                 type="button"
                 disabled={!available[v]}
                 onClick={() => setChoice({ view: v, runCount })}
                 aria-pressed={shown === v}
-                title={v === 'compare' ? 'Both engines side by side; pan or zoom either map and both follow' : undefined}
+                title={v === 'compare' ? t.map.compareTitle : undefined}
                 className={`rounded-lg px-3 py-1 font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
                   shown === v ? 'bg-accent text-canvas' : 'text-ink hover:bg-sunken disabled:hover:bg-transparent'
                 }`}
               >
-                {VIEW_LABEL[v]}
+                {t.map.views[v]}
               </button>
             ))}
           </div>
@@ -688,11 +660,11 @@ export function FloodMap({
           {showsTemporal && (firstWet || maxDepth) && (
             <div
               role="radiogroup"
-              aria-label="Temporal layer"
-              title={against ? 'Turn Observed off to show arrival time or maximum depth' : undefined}
+              aria-label={t.map.temporalLayer}
+              title={against ? t.map.turnObservedOff : undefined}
               className="float-card flex gap-0.5 rounded-lg p-0.5 text-xs"
             >
-              {(Object.keys(PRODUCT_LABEL) as TemporalProduct[]).map((p) => (
+              {PRODUCTS.map((p) => (
                 <button
                   key={p}
                   type="button"
@@ -700,19 +672,19 @@ export function FloodMap({
                   aria-checked={shownProduct === p}
                   disabled={Boolean(against) && p !== 'depth'}
                   onClick={() => setProduct(p)}
-                  title={PRODUCT_TITLE[p]}
+                  title={t.map.productTitles[p]}
                   className={`rounded-md px-2.5 py-0.5 font-medium whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
                     shownProduct === p ? 'bg-ink text-canvas' : 'text-ink-muted hover:text-ink disabled:hover:text-ink-muted'
                   }`}
                 >
-                  {PRODUCT_LABEL[p]}
+                  {t.map.products[p]}
                 </button>
               ))}
             </div>
           )}
           {showsTemporal && layers.temporal?.neighborhood === 'von_neumann' && (
             <div className="float-card rounded-lg border-l-2 border-warn px-2.5 py-1 text-xs text-ink">
-              von Neumann neighborhood: not validated
+              {t.map.vonNeumannWarning}
             </div>
           )}
           {seedNotice && (
@@ -731,44 +703,44 @@ export function FloodMap({
       <div className="absolute top-3 right-3 z-1000 flex gap-2">
         {shown && (
           <Popover
-            label="Export"
+            label={t.map.export}
             triggerClassName="float-card flex h-9 items-center gap-1.5 rounded-xl px-3 text-[13px] font-medium text-ink"
             trigger={() => (
               <>
                 <IconDownload className="h-[18px] w-[18px]" />
-                <span className="hidden lg:inline">{exporting ? 'Saving…' : 'Export'}</span>
+                <span className="hidden lg:inline">{exporting ? t.map.saving : t.map.export}</span>
               </>
             )}
           >
-            <PopoverHeading>Export what is on the map</PopoverHeading>
-            <div role="group" aria-label="Export" className="flex flex-col">
+            <PopoverHeading>{t.map.exportHeading}</PopoverHeading>
+            <div role="group" aria-label={t.map.export} className="flex flex-col">
               <button
                 type="button"
                 onClick={() => void exportPng()}
                 disabled={exporting}
                 className="flex flex-col rounded-lg px-2 py-1.5 text-left hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-40"
               >
-                <span className="text-[13px] font-medium">{exporting ? 'Saving PNG…' : 'PNG image'}</span>
-                <span className="text-[11px] text-ink-muted">The map as shown, with its legend</span>
+                <span className="text-[13px] font-medium">{exporting ? t.map.pngSaving : t.map.png}</span>
+                <span className="text-[11px] text-ink-muted">{t.map.pngHint}</span>
               </button>
               <button
                 type="button"
                 onClick={exportGeoJson}
                 className="flex flex-col rounded-lg px-2 py-1.5 text-left hover:bg-sunken"
               >
-                <span className="text-[13px] font-medium">GeoJSON</span>
-                <span className="text-[11px] text-ink-muted">Flooded extent as polygons (WGS84)</span>
+                <span className="text-[13px] font-medium">{t.map.geojson}</span>
+                <span className="text-[11px] text-ink-muted">{t.map.geojsonHint}</span>
               </button>
             </div>
           </Popover>
         )}
         <Popover
-          label="Map layers"
+          label={t.map.mapLayers}
           triggerClassName="float-card flex h-9 items-center gap-1.5 rounded-xl px-3 text-[13px] font-medium text-ink"
           trigger={() => (
             <>
               <IconLayers className="h-[18px] w-[18px]" />
-              <span className="hidden sm:inline">Layers</span>
+              <span className="hidden sm:inline">{t.map.layers}</span>
               {activeOverlays > 0 && (
                 <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold text-canvas">
                   {activeOverlays}
@@ -777,9 +749,9 @@ export function FloodMap({
             </>
           )}
         >
-          <PopoverHeading>Basemap</PopoverHeading>
-          <div role="radiogroup" aria-label="Basemap" className="grid grid-cols-2 gap-1 px-1 pb-1">
-            {Object.values(BASEMAPS).map(({ id, label }) => (
+          <PopoverHeading>{t.map.basemap}</PopoverHeading>
+          <div role="radiogroup" aria-label={t.map.basemap} className="grid grid-cols-2 gap-1 px-1 pb-1">
+            {Object.values(BASEMAPS).map(({ id }) => (
               <button
                 key={id}
                 type="button"
@@ -790,32 +762,28 @@ export function FloodMap({
                   basemapId === id ? 'bg-ink text-canvas' : 'bg-sunken text-ink hover:bg-line'
                 }`}
               >
-                {label}
+                {t.map.basemaps[id]}
               </button>
             ))}
           </div>
           {(observed || mapGrid) && (
             <>
               <div className="mx-2 my-1 h-px bg-line" />
-              <PopoverHeading>Overlays</PopoverHeading>
-              <div role="group" aria-label="Map layers" className="flex flex-col">
+              <PopoverHeading>{t.map.overlays}</PopoverHeading>
+              <div role="group" aria-label={t.map.mapLayers} className="flex flex-col">
                 {observed && (
                   <LayerToggle
-                    label="Observed flood"
-                    title="Draw the run against the observed May 2024 flood extent"
-                    hint="May 2024 extent, scored against the run"
+                    {...t.map.observedLayer}
                     swatch={OBSERVED_COLOR}
                     on={observedOn}
                     onToggle={() => setObservedOn((on) => !on)}
                   />
                 )}
                 {mapGrid &&
-                  INPUT_LAYERS.map(({ id, label, title, hint, swatch }) => (
+                  INPUT_LAYERS.map(({ id, copy, swatch }) => (
                     <LayerToggle
                       key={id}
-                      label={label}
-                      title={title}
-                      hint={hint}
+                      {...t.map[copy]}
                       swatch={swatch}
                       on={inputLayer === id}
                       onToggle={() => selectInputLayer(inputLayer === id ? 'off' : id)}
@@ -828,7 +796,7 @@ export function FloodMap({
             <>
               <div className="mx-2 my-1 h-px bg-line" />
               <label className="flex items-center gap-3 px-2 pt-1 pb-1.5 text-[13px]">
-                <span className="font-medium">Opacity</span>
+                <span className="font-medium">{t.map.opacity}</span>
                 <input
                   type="range"
                   min={0.2}

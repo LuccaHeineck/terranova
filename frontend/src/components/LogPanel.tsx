@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { useI18n } from '../i18n'
 
 interface LogPanelProps {
   log: string[]
@@ -9,6 +10,7 @@ const STICK_TO_BOTTOM_PX = 24
 
 /** The Log tab: the run's log lines as a console. */
 export function LogPanel({ log }: LogPanelProps) {
+  const { t } = useI18n()
   const logRef = useRef<HTMLUListElement | null>(null)
   const atBottomRef = useRef(true)
 
@@ -21,7 +23,7 @@ export function LogPanel({ log }: LogPanelProps) {
   return (
     <div className="flex min-h-0 flex-1 flex-col px-4 pt-1 pb-4">
       {log.length === 0 ? (
-        <p className="text-[13px] text-ink-muted">Nothing logged yet. A run's progress appears here.</p>
+        <p className="text-[13px] text-ink-muted">{t.log.empty}</p>
       ) : (
         <ul
           ref={logRef}

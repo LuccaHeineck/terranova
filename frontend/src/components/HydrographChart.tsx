@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent } from 'react'
 import type { HydrographRecord } from '../types/simulation'
 import { DEPTH_BANDS } from '../rendering/depthToImage'
+import { messages, num, upTo, useI18n } from '../i18n'
 
 interface HydrographChartProps {
   record: HydrographRecord
@@ -40,15 +41,15 @@ function yTicks(max: number): number[] {
 }
 
 function kilo(value: number): string {
-  return value >= 1000 ? `${value / 1000}k` : `${value}`
+  return value >= 1000 ? `${upTo(value / 1000, 1)}k` : upTo(value, 1)
 }
 
 function hours(seconds: number): string {
-  return `${(seconds / 3600).toFixed(1)} h`
+  return `${num(seconds / 3600, 1)} h`
 }
 
 function m3s(value: number): string {
-  return `${Math.round(value).toLocaleString('en-US')} m³/s`
+  return messages().hydrograph.discharge(value)
 }
 
 /**
@@ -56,6 +57,7 @@ function m3s(value: number): string {
  * legend box: the section title names it. Hovering reads off any point of the record.
  */
 export function HydrographChart({ record, markerSeconds }: HydrographChartProps) {
+  const { t } = useI18n()
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [width, setWidth] = useState(280)
   const [hoverSeconds, setHoverSeconds] = useState<number | null>(null)
@@ -101,7 +103,7 @@ export function HydrographChart({ record, markerSeconds }: HydrographChartProps)
   return (
     <div ref={containerRef} className="flex flex-col gap-1.5">
       <div className="flex items-baseline justify-between gap-2 text-xs tabular-nums" aria-live="polite">
-        <span className="text-ink-muted">{hoverSeconds !== null ? 'At cursor' : marker !== null ? 'At the timeline' : 'Peak'}</span>
+        <span className="text-ink-muted">{hoverSeconds !== null ? t.hydrograph.atCursor : marker !== null ? t.hydrograph.atTimeline : t.hydrograph.peak}</span>
         <span className="text-ink">
           {readout !== null
             ? `t = ${hours(readout)} · ${m3s(dischargeAt(record, readout))}`
@@ -112,7 +114,7 @@ export function HydrographChart({ record, markerSeconds }: HydrographChartProps)
         width={width}
         height={HEIGHT}
         role="img"
-        aria-label={`Discharge at the Estrela gauge over ${hours(duration)}, peaking at ${m3s(record.peak_discharge_m3s)} at t = ${hours(record.peak_elapsed_seconds)}`}
+        aria-label={t.hydrograph.aria(hours(duration), m3s(record.peak_discharge_m3s), hours(record.peak_elapsed_seconds))}
         className="touch-none select-none"
         onPointerMove={onPointerMove}
         onPointerLeave={() => setHoverSeconds(null)}
@@ -136,7 +138,7 @@ export function HydrographChart({ record, markerSeconds }: HydrographChartProps)
 
         <line x1={peakX} x2={peakX} y1={MARGIN.top} y2={MARGIN.top + plotH} className="stroke-ink-muted" strokeDasharray="2 3" />
         <text x={peakX} y={MARGIN.top - 6} textAnchor={peakX > width - 50 ? 'end' : 'middle'} className="fill-ink-muted text-[10px]">
-          peak
+          {t.hydrograph.peakTick}
         </text>
 
         <path d={path} fill="none" stroke={SERIES_COLOR} strokeWidth={2} strokeLinejoin="round" />
@@ -168,9 +170,8 @@ export function HydrographChart({ record, markerSeconds }: HydrographChartProps)
         )}
       </svg>
       <p className="text-xs leading-snug text-ink-muted">
-        Station {record.station_code}, Porto Fluvial de Estrela: ANA's discharge, from the stage record through the
-        station's own rating pairs. Peak {m3s(record.peak_discharge_m3s)} at t = {hours(record.peak_elapsed_seconds)}.
-        {marker !== null && ' The vertical marker follows the timeline.'}
+        {t.hydrograph.caption(record.station_code, m3s(record.peak_discharge_m3s), hours(record.peak_elapsed_seconds))}
+        {marker !== null && t.hydrograph.markerNote}
       </p>
     </div>
   )

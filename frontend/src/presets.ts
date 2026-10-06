@@ -19,10 +19,6 @@ export const GAUGE_DRIVEN_FRAME_INTERVAL = 500
  */
 export const VON_NEUMANN_MAX_OUTFLOW_FRACTION = 0.085
 
-/** The note shown wherever the neighborhood is chosen. */
-export const VALIDATED_NEIGHBORHOOD_NOTE =
-  'The validated May 2024 results (CSI 0.90, the fast-mode agreement) apply to the Moore neighborhood only.'
-
 /**
  * The one scenario both engines are validated on (docs/tcc-deviations.md sections 19 and 21): the real
  * May 2024 event on the 90m validation grid, fast mode at the observed peak vs. the temporal CA run to that

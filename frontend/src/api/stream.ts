@@ -1,3 +1,4 @@
+import { messages } from '../i18n'
 import { WS_BASE_URL } from './config'
 import { isDone } from '../types/simulation'
 import type { SimulationFrame, StreamMessage } from '../types/simulation'
@@ -22,7 +23,7 @@ export function openSimulationStream(runId: string, handlers: StreamHandlers): (
   }
 
   socket.onerror = () => {
-    handlers.onError('WebSocket error')
+    handlers.onError(messages().stream.socketError)
   }
 
   // An unknown or already-consumed run_id is rejected server-side with
@@ -30,9 +31,9 @@ export function openSimulationStream(runId: string, handlers: StreamHandlers): (
   // only as a close event, so it has to be handled here.
   socket.onclose = (event) => {
     if (event.code === 4004) {
-      handlers.onError('Run not found (unknown or already-streamed run_id).')
+      handlers.onError(messages().stream.runNotFound)
     } else if (!event.wasClean) {
-      handlers.onError(`Stream closed unexpectedly (code ${event.code}).`)
+      handlers.onError(messages().stream.closedUnexpectedly(event.code))
     }
   }
 

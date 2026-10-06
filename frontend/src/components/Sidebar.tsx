@@ -1,4 +1,5 @@
 import type { ComponentType, ReactNode, SVGProps } from 'react'
+import { useI18n } from '../i18n'
 import { IconClose, IconLog, IconResults, IconSetup } from './ui/icons'
 
 export type SidebarTab = 'setup' | 'results' | 'log'
@@ -6,10 +7,10 @@ export type SidebarTab = 'setup' | 'results' | 'log'
 /** What the main area shows: the map with the selected tab's panel beside it, or the About page over it. */
 export type Page = 'map' | 'about'
 
-const TABS: { tab: SidebarTab; label: string; Icon: ComponentType<SVGProps<SVGSVGElement>> }[] = [
-  { tab: 'setup', label: 'Setup', Icon: IconSetup },
-  { tab: 'results', label: 'Results', Icon: IconResults },
-  { tab: 'log', label: 'Log', Icon: IconLog },
+const TABS: { tab: SidebarTab; Icon: ComponentType<SVGProps<SVGSVGElement>> }[] = [
+  { tab: 'setup', Icon: IconSetup },
+  { tab: 'results', Icon: IconResults },
+  { tab: 'log', Icon: IconLog },
 ]
 
 /** At this width and up the panel sits beside the map; below it, it is a drawer over the map (min-[900px] below). */
@@ -45,6 +46,7 @@ export const PANEL_ID = 'sidebar-panel'
  * (see App).
  */
 export function Sidebar({ tab, onTab, page, onPage, open, onOpenChange, badges, panels }: SidebarProps) {
+  const { t } = useI18n()
   const shown = page === 'map' && open
   const select = (next: SidebarTab) => {
     onTab(next)
@@ -55,23 +57,23 @@ export function Sidebar({ tab, onTab, page, onPage, open, onOpenChange, badges, 
   return (
     <aside
       id={PANEL_ID}
-      aria-label="Panels"
+      aria-label={t.sidebar.panels}
       className={`${
         shown ? 'flex' : 'hidden'
       } absolute inset-y-0 left-0 z-1100 w-[320px] max-w-[calc(100vw-1rem)] flex-col rounded-r-xl bg-canvas shadow-2xl min-[900px]:static min-[900px]:z-auto min-[900px]:shrink-0 min-[900px]:rounded-none min-[900px]:shadow-none`}
     >
       <div className="flex items-center gap-1 px-3 pt-1 pb-3">
-        <div role="tablist" aria-label="Panels" className="grid flex-1 grid-cols-3 gap-0.5 rounded-lg bg-sunken p-0.5">
-          {TABS.map(({ tab: t, label, Icon }) => {
-            const active = t === tab
-            const badge = badges[t]
+        <div role="tablist" aria-label={t.sidebar.panels} className="grid flex-1 grid-cols-3 gap-0.5 rounded-lg bg-sunken p-0.5">
+          {TABS.map(({ tab: id, Icon }) => {
+            const active = id === tab
+            const badge = badges[id]
             return (
               <button
-                key={t}
+                key={id}
                 type="button"
                 role="tab"
                 aria-selected={active}
-                onClick={() => select(t)}
+                onClick={() => select(id)}
                 className={`flex items-center justify-center gap-1.5 rounded-md py-1.5 text-[13px] font-medium transition-colors ${
                   active ? 'bg-surface text-ink shadow-sm' : 'text-ink-muted hover:text-ink'
                 }`}
@@ -85,8 +87,8 @@ export function Sidebar({ tab, onTab, page, onPage, open, onOpenChange, badges, 
                     />
                   )}
                 </span>
-                {label}
-                {badge && <span className="sr-only">{badge === 'error' ? ' (error)' : ' (run in progress)'}</span>}
+                {t.sidebar.tabs[id]}
+                {badge && <span className="sr-only">{badge === 'error' ? t.sidebar.badgeError : t.sidebar.badgeLive}</span>}
               </button>
             )
           })}
@@ -94,15 +96,15 @@ export function Sidebar({ tab, onTab, page, onPage, open, onOpenChange, badges, 
         <button
           type="button"
           onClick={() => onOpenChange(false)}
-          aria-label="Close panel"
+          aria-label={t.sidebar.closePanel}
           className="rounded-lg p-1.5 text-ink-muted hover:bg-sunken hover:text-ink min-[900px]:hidden"
         >
           <IconClose className="h-4 w-4" />
         </button>
       </div>
-      {TABS.map(({ tab: t }) => (
-        <div key={t} role="tabpanel" hidden={t !== tab} className="flex min-h-0 flex-1 flex-col">
-          {panels[t]}
+      {TABS.map(({ tab: id }) => (
+        <div key={id} role="tabpanel" hidden={id !== tab} className="flex min-h-0 flex-1 flex-col">
+          {panels[id]}
         </div>
       ))}
     </aside>

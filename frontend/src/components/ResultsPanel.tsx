@@ -14,6 +14,7 @@ import {
 import type { ExtentAgreement } from '../rendering/depthToImage'
 import { scoreAgainstObserved } from '../rendering/observed'
 import type { ObservedMasks } from '../rendering/observed'
+import { int, messages, num, useI18n } from '../i18n'
 import { HydrographChart } from './HydrographChart'
 import { Callout } from './ui/Callout'
 import { Section } from './ui/Section'
@@ -40,21 +41,20 @@ const TEMPORAL_COLOR = DEPTH_BANDS[1].color
 const BOTH_FILL = `repeating-linear-gradient(135deg, ${TEMPORAL_COLOR} 0 4px, ${FAST_EXTENT_COLOR} 4px 8px)`
 
 function formatDuration(seconds: number): string {
-  if (seconds < 1) return `${(seconds * 1000).toFixed(0)} ms`
-  if (seconds < 120) return `${seconds.toFixed(1)} s`
-  return `${(seconds / 60).toFixed(1)} min`
+  if (seconds < 1) return `${num(seconds * 1000)} ms`
+  if (seconds < 120) return `${num(seconds, 1)} s`
+  return `${num(seconds / 60, 1)} min`
 }
 
 function wallClock(layer: ResultLayer): string {
-  return `${formatDuration(layer.wallClockSeconds)}${layer.finished ? '' : ' so far'}`
+  return `${formatDuration(layer.wallClockSeconds)}${layer.finished ? '' : messages().results.soFar}`
 }
 
-function count(n: number): string {
-  return n.toLocaleString('en-US')
-}
+type Compass = keyof ReturnType<typeof messages>['common']['compass']
 
-function degrees(value: number, positive: string, negative: string): string {
-  return `${Math.abs(value).toFixed(4)}° ${value < 0 ? negative : positive}`
+function degrees(value: number, positive: Compass, negative: Compass): string {
+  const { compass } = messages().common
+  return `${num(Math.abs(value), 4)}° ${compass[value < 0 ? negative : positive]}`
 }
 
 /** A label/value row of a definition list. */
@@ -69,15 +69,16 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 
 /** The two flooded extents' overlap as one bar, each segment sized by its cell count. */
 function AgreementBar({ agreement }: { agreement: ExtentAgreement }) {
+  const { t } = useI18n()
   const total = agreement.both + agreement.temporalOnly + agreement.fastOnly
   const parts: { key: string; label: string; cells: number; fill: CSSProperties }[] = [
-    { key: 'both', label: 'Both', cells: agreement.both, fill: { background: BOTH_FILL } },
-    { key: 'temporal', label: 'Temporal only', cells: agreement.temporalOnly, fill: { background: TEMPORAL_COLOR } },
-    { key: 'fast', label: 'Fast only', cells: agreement.fastOnly, fill: { background: FAST_EXTENT_COLOR } },
+    { key: 'both', label: t.results.both, cells: agreement.both, fill: { background: BOTH_FILL } },
+    { key: 'temporal', label: t.results.temporalOnly, cells: agreement.temporalOnly, fill: { background: TEMPORAL_COLOR } },
+    { key: 'fast', label: t.results.fastOnly, cells: agreement.fastOnly, fill: { background: FAST_EXTENT_COLOR } },
   ]
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex h-2.5 overflow-hidden rounded-full bg-line" role="img" aria-label="Flooded-cell agreement">
+      <div className="flex h-2.5 overflow-hidden rounded-full bg-line" role="img" aria-label={t.results.agreement}>
         {total > 0 &&
           parts.map(({ key, cells, fill }) => (
             <span key={key} style={{ ...fill, width: `${(cells / total) * 100}%` }} className="h-full" />
@@ -89,7 +90,7 @@ function AgreementBar({ agreement }: { agreement: ExtentAgreement }) {
             <span aria-hidden="true" className="h-2.5 w-2.5 shrink-0 rounded-sm" style={fill} />
             <dt className="text-ink-muted">{label}</dt>
             <dd className="ml-auto text-ink tabular-nums">
-              {count(cells)} cells
+              {t.common.cells(cells)}
               {total > 0 && <span className="ml-1.5 text-ink-muted">{Math.round((cells / total) * 100)}%</span>}
             </dd>
           </div>
@@ -100,7 +101,7 @@ function AgreementBar({ agreement }: { agreement: ExtentAgreement }) {
 }
 
 function metric(value: number | null): string {
-  return value === null ? 'n/a' : value.toFixed(2)
+  return value === null ? messages().common.na : num(value, 2)
 }
 
 interface ScoredRun {
@@ -113,6 +114,7 @@ interface ScoredRun {
 
 /** One run's frame scored against the observed extent: gap-corrected CSI first, then its parts. */
 function ScoreCard({ run, observed }: { run: ScoredRun; observed: ObservedMasks }) {
+  const { t } = useI18n()
   const agreement = useMemo(() => scoreAgainstObserved(run.frame.depth, observed), [run.frame, observed])
   if (!agreement) return null
   const { corrected, naive } = agreement
@@ -124,15 +126,15 @@ function ScoreCard({ run, observed }: { run: ScoredRun; observed: ObservedMasks 
       </div>
       <div className="flex items-baseline gap-2">
         <span className="font-serif text-[40px] leading-none text-ink tabular-nums">{metric(corrected.csi)}</span>
-        <span className="text-ink-muted">CSI, gap-corrected</span>
+        <span className="text-ink-muted">{t.results.csiCorrected}</span>
       </div>
       <dl className="mt-1 flex flex-col gap-0.5 border-t border-line pt-1.5">
-        <Row label="Hit rate">{metric(corrected.hitRate)}</Row>
-        <Row label="False alarm rate">{metric(corrected.falseAlarmRate)}</Row>
-        <Row label="Hit / missed / false alarm">
-          {count(corrected.tp)} / {count(corrected.fn)} / {count(corrected.fp)}
+        <Row label={t.results.hitRate}>{metric(corrected.hitRate)}</Row>
+        <Row label={t.results.falseAlarmRate}>{metric(corrected.falseAlarmRate)}</Row>
+        <Row label={t.results.hitMissedFalse}>
+          {int(corrected.tp)} / {int(corrected.fn)} / {int(corrected.fp)}
         </Row>
-        <Row label="Naive CSI (whole grid)">{metric(naive.csi)}</Row>
+        <Row label={t.results.naiveCsi}>{metric(naive.csi)}</Row>
       </dl>
     </div>
   )
@@ -151,35 +153,31 @@ interface ObservedScoresProps {
  * only on the grid the observation is on.
  */
 function ObservedScores({ temporal, fast, temporalFrame, observed }: ObservedScoresProps) {
+  const { t } = useI18n()
   const runs: ScoredRun[] = []
   const scorable = (layer: ResultLayer | null) => layer && layer.mode !== 'seeded_pool'
   if (scorable(temporal) && temporalFrame) {
     runs.push({
       key: 'temporal',
-      name: 'Temporal CA',
-      when: `t = ${((temporalFrame.elapsed_time ?? 0) / 3600).toFixed(1)} h`,
+      name: t.common.temporalCa,
+      when: t.common.tHours((temporalFrame.elapsed_time ?? 0) / 3600),
       frame: temporalFrame,
     })
   }
-  if (scorable(fast) && fast!.frame) runs.push({ key: 'fast', name: 'Fast', when: 'at the peak', frame: fast!.frame })
+  if (scorable(fast) && fast!.frame) runs.push({ key: 'fast', name: t.common.fast, when: t.results.atPeak, frame: fast!.frame })
 
   const resolutions = [temporal, fast].filter(scorable).map((layer) => layer!.resolution)
   if (runs.length === 0 && resolutions.length === 0) return null
   const onGrid = resolutions.every((r) => r === observed.resolution)
 
   return (
-    <Section title="Against the observed flood">
-      <p className="-mt-1 text-xs leading-snug text-ink-muted">
-        SGB/CPRM extent at the {observed.stageM.toFixed(2)} m peak stage. Gap-corrected scores leave out the{' '}
-        {count(observed.excludedCount)} Estrela-side cells the reference never modeled. Documented: the temporal CA
-        scores CSI 0.90 at the peak.
-      </p>
+    <Section title={t.results.observed}>
+      <p className="-mt-1 text-xs leading-snug text-ink-muted">{t.results.observedIntro(observed.stageM, observed.excludedCount)}</p>
       {onGrid ? (
         runs.map((run) => <ScoreCard key={run.key} run={run} observed={observed} />)
       ) : (
         <Callout tone="info">
-          The observed extent is scored on the {observed.resolution} m validation grid only; this run used the{' '}
-          {resolutions.find((r) => r !== observed.resolution)} m grid.
+          {t.results.wrongGrid(observed.resolution, resolutions.find((r) => r !== observed.resolution))}
         </Callout>
       )}
     </Section>
@@ -195,6 +193,7 @@ interface ComparisonProps {
 
 /** Shown only when both engines have a result for the same scenario and grid (see useSimulationRun). */
 function Comparison({ temporal, fast, temporalFrame, followingLatest }: ComparisonProps) {
+  const { t } = useI18n()
   const fastFrame = fast.frame!
   const agreement = useMemo(
     () => compareExtents(temporalFrame.depth, fastFrame.depth),
@@ -207,45 +206,38 @@ function Comparison({ temporal, fast, temporalFrame, followingLatest }: Comparis
   const reachedPeak = elapsedHours >= peakHours - 1e-6
 
   return (
-    <Section title="Comparison">
+    <Section title={t.results.comparison}>
       <p className="-mt-1 text-xs text-ink-muted">
-        {temporal.resolution} m grid{followingLatest ? '' : ', temporal frame selected on the timeline'}. Flooded
-        means depth &gt; {FLOODED_DEPTH_THRESHOLD_M} m.
+        {t.results.comparisonIntro(temporal.resolution, followingLatest, FLOODED_DEPTH_THRESHOLD_M)}
       </p>
       {agreement && <AgreementBar agreement={agreement} />}
 
       <div className="flex flex-col gap-2 text-xs">
         <div className="flex flex-col gap-1 rounded-xl bg-surface px-3 py-2.5 ring-1 ring-line">
-          <span className="text-[13px] font-semibold text-ink">Temporal CA</span>
+          <span className="text-[13px] font-semibold text-ink">{t.common.temporalCa}</span>
           <dl className="flex flex-col gap-0.5">
-            <Row label="Flooded">
-              {count(temporalFlooded)} cells at t = {elapsedHours.toFixed(1)} h
-            </Row>
-            <Row label="Wall-clock">{wallClock(temporal)}</Row>
+            <Row label={t.results.flooded}>{t.results.floodedAt(temporalFlooded, elapsedHours)}</Row>
+            <Row label={t.results.wallClock}>{wallClock(temporal)}</Row>
           </dl>
         </div>
         <div className="flex flex-col gap-1 rounded-xl bg-surface px-3 py-2.5 ring-1 ring-line">
-          <span className="text-[13px] font-semibold text-ink">Fast</span>
+          <span className="text-[13px] font-semibold text-ink">{t.common.fast}</span>
           <dl className="flex flex-col gap-0.5">
-            <Row label="Flooded">
-              {count(fastFrame.flooded_cells ?? 0)} cells at the peak (t = {peakHours.toFixed(1)} h)
-            </Row>
-            <Row label="Engine">{formatDuration(fastFrame.compute_seconds ?? 0)}</Row>
-            <Row label="Wall-clock">{wallClock(fast)}</Row>
+            <Row label={t.results.flooded}>{t.results.floodedAtPeak(fastFrame.flooded_cells ?? 0, peakHours)}</Row>
+            <Row label={t.results.engineTime}>{formatDuration(fastFrame.compute_seconds ?? 0)}</Row>
+            <Row label={t.results.wallClock}>{wallClock(fast)}</Row>
           </dl>
         </div>
       </div>
 
       {temporal.neighborhood !== fast.neighborhood && (
         <Callout tone="warn">
-          Different neighborhoods: the temporal run used {NEIGHBORHOOD_LABEL[temporal.neighborhood]}; the fast engine
-          is {NEIGHBORHOOD_LABEL[fast.neighborhood]}-based. The validated agreement numbers are for Moore only.
+          {t.results.differentNeighborhoods(NEIGHBORHOOD_LABEL[temporal.neighborhood], NEIGHBORHOOD_LABEL[fast.neighborhood])}
         </Callout>
       )}
       {!reachedPeak && (
         <Callout tone="warn">
-          The temporal run is at t = {elapsedHours.toFixed(1)} h of the {peakHours.toFixed(1)} h to the peak that the
-          fast mode models, so the two extents are from different moments of the event.
+          {t.results.notAtPeak(elapsedHours, peakHours)}
         </Callout>
       )}
     </Section>
@@ -265,11 +257,11 @@ export function ResultsPanel({
   hydrograph,
   onGoToSetup,
 }: ResultsPanelProps) {
+  const { t } = useI18n()
   const { temporal, fast } = layers
-  const ran = [
-    temporal && `Temporal CA (${NEIGHBORHOOD_LABEL[temporal.neighborhood]})`,
-    fast && 'Fast',
-  ].filter(Boolean)
+  const ran = [temporal && t.results.ranTemporal(NEIGHBORHOOD_LABEL[temporal.neighborhood]), fast && t.common.fast].filter(
+    Boolean,
+  )
   const resolution = (temporal ?? fast)?.resolution
   const empty = status === 'idle' && !temporal && !fast && !error
 
@@ -280,33 +272,33 @@ export function ResultsPanel({
       {empty ? (
         <div className="flex flex-col items-start gap-3 rounded-xl border border-dashed border-line p-5">
           <p className="text-[13px] leading-snug text-ink-muted">
-            No results yet. Set up a run, or replay the May 2024 flood.
+            {t.results.empty}
           </p>
           <button
             type="button"
             onClick={onGoToSetup}
             className="rounded-lg bg-surface px-3 py-1.5 text-[13px] font-medium text-ink ring-1 ring-line hover:bg-sunken"
           >
-            Go to setup
+            {t.results.goToSetup}
           </button>
         </div>
       ) : (
-        <Section title="This run">
+        <Section title={t.results.thisRun}>
           <dl className="flex flex-col gap-1 text-xs">
-            {ran.length > 0 && <Row label={ran.length > 1 ? 'Engines' : 'Engine'}>{ran.join(', ')}</Row>}
-            {resolution && <Row label="Grid">{resolution} m</Row>}
+            {ran.length > 0 && <Row label={ran.length > 1 ? t.results.engines : t.results.engine}>{ran.join(', ')}</Row>}
+            {resolution && <Row label={t.results.grid}>{resolution} m</Row>}
             {gridShape && (
-              <Row label="Cells">
-                {count(gridShape[0])} × {count(gridShape[1])}{' '}
-                <span className="text-ink-muted">({count(gridShape[0] * gridShape[1])})</span>
+              <Row label={t.results.cells}>
+                {int(gridShape[0])} × {int(gridShape[1])}{' '}
+                <span className="text-ink-muted">({int(gridShape[0] * gridShape[1])})</span>
               </Row>
             )}
             {bounds && (
               <>
-                <Row label="West / east">
+                <Row label={t.results.westEast}>
                   {degrees(bounds.west, 'E', 'W')} – {degrees(bounds.east, 'E', 'W')}
                 </Row>
-                <Row label="South / north">
+                <Row label={t.results.southNorth}>
                   {degrees(bounds.south, 'N', 'S')} – {degrees(bounds.north, 'N', 'S')}
                 </Row>
               </>
@@ -316,7 +308,7 @@ export function ResultsPanel({
       )}
 
       {hydrograph && (temporal?.mode === 'gauge_driven' || fast) && (
-        <Section title="May 2024 gauge record">
+        <Section title={t.results.hydrograph}>
           <HydrographChart
             record={hydrograph}
             markerSeconds={temporal?.mode === 'gauge_driven' ? (temporalFrame?.elapsed_time ?? null) : null}

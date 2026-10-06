@@ -1,3 +1,4 @@
+import { messages } from '../i18n'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createSimulation } from '../api/client'
 import { openSimulationStream } from '../api/stream'
@@ -59,16 +60,17 @@ function isComparable(layer: ResultLayer, mode: RunMode, resolution: Resolution)
 }
 
 function logLine(mode: RunMode, frame: SimulationFrame): string {
+  const { log } = messages()
   if (mode === 'fast') {
-    return (
-      `fast: Q=${frame.peak_discharge_m3s?.toFixed(1)} m3/s, flooded=${frame.flooded_cells} cells, ` +
-      `engine=${((frame.compute_seconds ?? 0) * 1000).toFixed(0)} ms, ` +
-      `out=${frame.outflow_m3s?.toFixed(1)} retained=${frame.retained_m3s?.toFixed(1)} m3/s`
+    return log.fastLine(
+      frame.peak_discharge_m3s ?? 0,
+      frame.flooded_cells ?? 0,
+      (frame.compute_seconds ?? 0) * 1000,
+      frame.outflow_m3s ?? 0,
+      frame.retained_m3s ?? 0,
     )
   }
-  const elapsedNote =
-    frame.elapsed_time !== undefined ? `, elapsed=${(frame.elapsed_time / 60).toFixed(1)}min` : ''
-  return `step ${frame.step}: volume=${frame.volume.toFixed(4)}${elapsedNote}`
+  return log.stepLine(frame.step, frame.volume, frame.elapsed_time !== undefined ? frame.elapsed_time / 60 : undefined)
 }
 
 /** A layer for a run that has started (or, in a replay, is queued) but has no frame yet. */
@@ -175,18 +177,16 @@ export function useSimulationRun() {
         setBounds(created.bounds)
         setStatus('streaming')
         if (engine === 'temporal') {
-          const note = neighborhood === 'moore' ? '' : ' (not validated)'
           setLog((prev) => [
             ...prev.slice(-(MAX_LOG_LINES - 1)),
-            `temporal CA: ${NEIGHBORHOOD_LABEL[neighborhood]} neighborhood${note}`,
+            messages().log.temporalLine(NEIGHBORHOOD_LABEL[neighborhood], neighborhood === 'moore'),
           ])
         }
         if (created.seed_cell) {
           const [row, col] = created.seed_cell
-          const where = params.seed_location ? 'the chosen location' : 'the lowest point'
           setLog((prev) => [
             ...prev.slice(-(MAX_LOG_LINES - 1)),
-            `seeded ${params.seed_volume ?? DEFAULT_SEED_VOLUME} at row ${row}, col ${col} (${where})`,
+            messages().log.seededLine(params.seed_volume ?? DEFAULT_SEED_VOLUME, row, col, Boolean(params.seed_location)),
           ])
         }
 

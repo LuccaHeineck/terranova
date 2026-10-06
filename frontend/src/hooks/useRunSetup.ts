@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react'
+import { messages } from '../i18n'
 import { containsPoint } from '../geo/footprint'
 import type { LatLon, Resolution } from '../types/simulation'
 import type { Engine } from './useSimulationRun'
@@ -55,7 +56,7 @@ export function useRunSetup() {
   const placeSeed = useCallback(
     (point: LatLon, footprint: readonly (readonly [number, number])[]) => {
       if (!containsPoint(footprint, point.lat, point.lon)) {
-        setSeedNotice(`Outside the ${resolution} m grid: click inside the dashed outline.`)
+        setSeedNotice(messages().config.seedOutside(resolution))
         return
       }
       setSeed(point)
