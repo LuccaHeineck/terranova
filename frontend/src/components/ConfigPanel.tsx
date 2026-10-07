@@ -54,7 +54,7 @@ const SEED_PATCH_CELLS = 25
 function gridOptions(t: Messages): SegmentOption<Resolution>[] {
   return [
     { value: 30, label: '30 m', caption: t.config.gridCaption[30] },
-    { value: 60, label: '60 m', caption: t.config.gridCaption[60], captionTone: 'warn' },
+    { value: 60, label: '60 m', caption: t.config.gridCaption[60] },
     { value: 90, label: '90 m', caption: t.config.gridCaption[90] },
   ]
 }

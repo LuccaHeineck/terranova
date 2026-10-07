@@ -11,7 +11,7 @@ export const NEIGHBORHOOD_LABEL: Record<Neighborhood, string> = {
   von_neumann: 'von Neumann',
 }
 
-/** Served grid resolutions, in meters: the live grid, an unvalidated 60 m grid and the validation grid. */
+/** Served grid resolutions, in meters: the live grid, a 60 m grid (scored offline) and the validation grid. */
 export type Resolution = 30 | 60 | 90
 
 /** A WGS84 point, in degrees. */

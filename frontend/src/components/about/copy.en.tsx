@@ -208,7 +208,7 @@ export const aboutEn: AboutCopy = {
 
   limitsTitle: 'Limits worth knowing',
   limits: [
-    'Only the 90 m grid is validated. The 30 m and 60 m grids run the same model at finer detail, but their results are not scored.',
+    'The 90 m grid is the validated one, and the only one scored live in the app. The 60 m grid was scored offline against the same event (gap-corrected CSI 0.87 for the temporal engine, 0.88 for fast mode). The 30 m grid runs the same model at finer detail, but its results are not scored.',
     'The validated results use the 8-neighbor (Moore) rule. The 4-neighbor (von Neumann) option is there to compare against, not validated.',
     <>
       The observed map leaves out part of the Estrela bank, so those cells are shown as &ldquo;not scored&rdquo; and

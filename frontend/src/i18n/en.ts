@@ -65,7 +65,7 @@ export const en = {
     temporalDescription: 'Time-stepped flow, streams frames',
     fastDescription: 'Steady extent at the observed peak',
     grid: 'Grid',
-    gridCaption: { 30: 'Live', 60: 'Unvalidated', 90: 'Validation' } as Record<number, string>,
+    gridCaption: { 30: 'Live', 60: 'Scored', 90: 'Validation' } as Record<number, string>,
     fastNote:
       'Real May 2024 event: one steady classification at the observed peak discharge. No time steps, so there is no frame interval or outflow fraction.',
     scenario: 'Scenario',

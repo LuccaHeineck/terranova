@@ -26,12 +26,15 @@ the same offline masks the API serves (rebuilt from the stage layers
 
 `--conveyance single_cell` reproduces section 19's first result (CSI 0.53);
 the default `cross_section` rule is section 23's. `--min-reach-length-m`
-reproduces section 23's reach-length sweep.
+reproduces section 23's reach-length sweep. `--resolution 60` scores the 60m grid
+the same way (gauge cell `settings.INTERMEDIATE_GAUGE_ROW/COL`); the temporal
+column then still quotes the 90m numbers, for reference only.
 
 Run from the backend/ directory with the venv active:
 
-    python -m examples.fast_mode_may2024 [--skip-gap-correction] [--conveyance cross_section|single_cell]
-        [--min-reach-length-m M] [--save-masks PATH.npz] [--depth-png PATH.png]
+    python -m examples.fast_mode_may2024 [--resolution 90|60] [--skip-gap-correction]
+        [--conveyance cross_section|single_cell] [--min-reach-length-m M] [--save-masks PATH.npz]
+        [--depth-png PATH.png]
 """
 
 import argparse
@@ -92,6 +95,7 @@ def _score(simulated: np.ndarray, observed: np.ndarray) -> dict:
 
 
 def run(
+    resolution: int,
     skip_gap_correction: bool,
     conveyance: str,
     min_reach_length_m: float,
@@ -99,15 +103,10 @@ def run(
     depth_png: Path | None,
 ) -> None:
     total_start = time.perf_counter()
-    Z = build_elevation_matrix(
-        processed_path=settings.DEM_VALIDATION_PROCESSED_PATH,
-        resolution=settings.VALIDATION_RESOLUTION_METERS,
-    )
-    N = build_roughness_matrix(
-        reference_path=settings.DEM_VALIDATION_PROCESSED_PATH,
-        processed_path=settings.LANDCOVER_VALIDATION_PROCESSED_PATH,
-    )
-    dx = settings.VALIDATION_RESOLUTION_METERS
+    grid = settings.SCORED_GRIDS[resolution]
+    dx = float(resolution)
+    Z = build_elevation_matrix(processed_path=grid["dem_path"], resolution=dx)
+    N = build_roughness_matrix(reference_path=grid["dem_path"], processed_path=grid["landcover_path"])
     elapsed_seconds, stage_m = load_raw_stage_series(settings.HYDROGRAPH_RAW_PATH)
     peak_index = int(np.argmax(stage_m))
     peak_discharge = build_hydrograph().discharge_at(float(elapsed_seconds[peak_index]))
@@ -163,16 +162,19 @@ def run(
         f"max {result.depth.max():.2f}m"
     )
 
-    observed = build_observed_flood_mask(reference_path=settings.DEM_VALIDATION_PROCESSED_PATH)
+    observed = build_observed_flood_mask(reference_path=grid["dem_path"], processed_path=grid["flood_extent_path"])
     naive = _score(result.flooded, observed)
     gap_only = None
     if not skip_gap_correction:
-        _, excluded = build_validation_reference(Z)
+        gauge_row, gauge_col = grid["gauge_cell"]
+        _, excluded = build_validation_reference(
+            Z, reference_path=grid["dem_path"], gauge_row=gauge_row, gauge_col=gauge_col
+        )
         valid_gap_only = ~excluded
         gap_only = _score(result.flooded[valid_gap_only], observed[valid_gap_only])
     total_s = time.perf_counter() - total_start
 
-    print("\n=== fast (Torres-inspired, non-temporal) vs temporal engine, 90m, May 2024 peak ===")
+    print(f"\n=== fast (Torres-inspired, non-temporal) at {resolution}m vs temporal engine at 90m, May 2024 peak ===")
     print(f"{'':28s}{'fast':>14s}{'temporal':>14s}")
     print(f"{'naive TP / FP / FN':28s}{naive['tp']:>5d}/{naive['fp']:>4d}/{naive['fn']:>4d}"
           f"{_TEMPORAL_NAIVE['tp']:>5d}/{_TEMPORAL_NAIVE['fp']:>4d}/{_TEMPORAL_NAIVE['fn']:>4d}")
@@ -208,7 +210,9 @@ def run(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Torres-inspired fast mode vs. the real May 2024 event (90m).")
+    parser = argparse.ArgumentParser(description="Torres-inspired fast mode vs. the real May 2024 event.")
+    parser.add_argument("--resolution", type=int, choices=sorted(settings.SCORED_GRIDS), default=90,
+                        help="grid to score (default 90, the validated one)")
     parser.add_argument("--skip-gap-correction", action="store_true",
                         help="naive scoring only - skips the Estrela coverage-gap correction")
     parser.add_argument("--conveyance", choices=CONVEYANCE_RULES, default="cross_section",
@@ -223,7 +227,7 @@ def main() -> None:
     _require_raw_file(settings.LANDCOVER_RAW_PATH, "scripts.download_landcover")
     _require_raw_file(settings.HYDROGRAPH_RAW_PATH, "scripts.download_hydrograph")
     _require_raw_file(settings.FLOOD_EXTENT_RAW_PATH, "scripts.download_flood_extent")
-    run(args.skip_gap_correction, args.conveyance, args.min_reach_length_m, args.save_masks, args.depth_png)
+    run(args.resolution, args.skip_gap_correction, args.conveyance, args.min_reach_length_m, args.save_masks, args.depth_png)
 
 
 if __name__ == "__main__":

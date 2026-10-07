@@ -11,8 +11,8 @@ disk or triggering the app's lifespan at all.
 `GRIDS` holds one `Grid` per served resolution: the live 30m grid (steps 3-4),
 the 90m validation grid (step 10), added so the temporal and fast engines can
 be compared at the real May 2024 peak in minutes rather than hours
-(docs/tcc-deviations.md section 21), and an unvalidated 60m grid in between for
-interactive runs. Each grid bundles everything that
+(docs/tcc-deviations.md section 21), and a 60m grid in between for interactive
+runs (scored against May 2024 too, docs/tcc-deviations.md section 24). Each grid bundles everything that
 depends only on its own terrain - including the outlet boundary override (step
 10) and the north-edge inflow mask (step 9) - so there's no best-effort case
 for any of it.

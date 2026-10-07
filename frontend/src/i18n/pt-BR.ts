@@ -62,7 +62,7 @@ export const ptBR: Messages = {
     temporalDescription: 'Escoamento passo a passo, transmite quadros',
     fastDescription: 'Extensão estática no pico observado',
     grid: 'Grade',
-    gridCaption: { 30: 'Ao vivo', 60: 'Não validada', 90: 'Validação' },
+    gridCaption: { 30: 'Ao vivo', 60: 'Avaliada', 90: 'Validação' },
     fastNote:
       'Evento real de maio de 2024: uma única classificação estática na vazão de pico observada. Sem passos de tempo, então não há intervalo de quadros nem fração de escoamento.',
     scenario: 'Cenário',

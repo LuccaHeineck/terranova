@@ -1051,7 +1051,8 @@ The same follow-up added a one-click "Replay May 2024 flood" preset. It runs thi
 at startup by the same ingestion calls as the 90m one, and it sits between the other two in wall-clock cost.
 The fast mode at 60m flooded 5,445 of 8,736 cells, with continuity exact. Like the 30m number above, this
 result has not been scored against the SGB reference, so treat it as a working display, not a validated
-one. Every validated figure in this document remains a 90m result.
+one. Every validated figure in this document remains a 90m result. *(Since scored: §24, gap-only CSI
+0.875 temporal and 0.880 fast at 60m, with nothing re-tuned.)*
 
 ---
 
@@ -1384,6 +1385,75 @@ remaining knobs were swept on the 90m grid, scored gap-only.
 - **Regression:** pinned in `tests/test_fast_engine.py` (cross-section naive 800 / 1,223 / 31, gap-only
   800 / 62 / 31, and §19's 731 / 2,109 / 100 under `single_cell`). New hand-computed tests cover the
   rating-curve stage on a V-valley, reach splitting, and the floodplain width and roughness responses.
+
+---
+
+## 24. The 60m grid scored against May 2024 — a resolution check, nothing re-tuned
+
+**TCC1:** names one simulation resolution (30m, TOPODATA's own) and does not discuss scoring at
+several resolutions. §12 moved the validated result to 90m for wall-clock reasons, and §21 added a 60m
+live grid, which was left unscored.
+
+**What was done:** the 60m grid is now scored with the same pipeline, the same event and the same
+correction as 90m. Both `examples/validate_may2024.py` and `examples/fast_mode_may2024.py` take
+`--resolution 60|90` (default 90, so the validated runs are unchanged), via `settings.SCORED_GRIDS`.
+- **Gauge geolocated at 60m:** the ANA "ESTRELA" gauge, through the same `ingestion.dem.lonlat_to_cell`
+  that reproduces the 90m cell (20, 26), lands on (30, 39) at 60m (`settings.INTERMEDIATE_GAUGE_ROW/COL`).
+  That cell sits on Lajeado's bank, 4 cells west of the row's channel minimum, like the 90m one. The
+  coverage-gap correction only uses which bank the gauge is on. At 60m the cell is on the bank slope
+  (Z = 28 m), not near the channel floor, so its WSE history is even less comparable to the real stage.
+- **Gap correction at 60m:** 5,018 of 8,736 cells (57.4%) are excluded, against 58.4% at 90m. The observed
+  extent covers 21.5% of the ROI, against 21.3% at 90m. The reference rasterizes consistently.
+- **`validate_may2024.py` now also scores gap-only in-script**, through the same offline
+  `build_validation_reference` the API uses, instead of only via `rescore_stage_invariant.py` afterwards.
+  The 90m control run reproduced the in-app result exactly: 789 / 47 / 42, **CSI 0.8986** (§16.4's
+  ulp-noise twin of 0.8997).
+- **Nothing was re-tuned.** `outflow_fraction = 0.085` (calibrated at 90m, §16.3), the Manning table and
+  the fast mode's 10 km reach length are all the defaults. So the 60m numbers are an out-of-sample
+  check of the 90m calibration, not a second calibration.
+
+**Results (May 2024 peak, Moore, defaults):**
+
+| | temporal 90m | temporal 60m | fast 90m | fast 60m |
+|---|---|---|---|---|
+| gap-only TP / FP / FN | 789 / 47 / 42 | 1,700 / 62 / 181 | 800 / 62 / 31 | 1,708 / 60 / 173 |
+| **gap-only CSI** | **0.899** | **0.875** | **0.896** | **0.880** |
+| hit rate / FAR (gap-only) | 0.949 / 0.056 | 0.904 / 0.035 | 0.963 / 0.072 | 0.908 / 0.034 |
+| naive CSI | 0.395 | 0.393 | 0.390 | 0.396 |
+| flooded share of the ROI | 50.1% | 47.5% | 51.8% | 47.4% |
+| shift noise floor, gap-only (±3 cells) | +0.0000 | +0.0000 | +0.0000 | +0.0000 |
+| engine steps / time | 134,639 | 232,908 (1.73×) | 73 ms | 168 ms |
+
+- **Conservation:** the 60m temporal run asserts exact mass balance at every one of its 232,908 steps,
+  as at 90m. The 60m fast mode's continuity is exact (23,472.4 m³/s in and out, 0 retained).
+- **Stability:** the 60m depth field is smooth and coherent, with no checkerboard texture. Its roughness
+  metric is 1.24, against 1.68 at 90m.
+- **Temporal vs. fast at 60m:** the two extents agree at CSI 0.948 (4,032 cells in both, 116 temporal-only,
+  105 fast-only).
+- **The shift noise floor** is +0.0000 under gap-only scoring at ±3 and ±4 cells (±240 m, about the
+  90m search's ±270 m). The temporal 60m naive score gains +0.003 at a (−1, −1) shift. That is in the
+  region the gap correction excludes, and smaller than §16.3's 0.0054 noise threshold.
+- **Where the 60m runs lose:** misses, not false alarms. FN go from 42 to 181 and from 31 to 173, while FP
+  stay level and FAR halves. The misses are the same 1–2 cell fringe as at 90m along the edges of the
+  tributary valleys (FN terrain median 37 m, against a TP median of 27 m), plus a pocket in the
+  south-west. Proportionally the fringe is larger because a 60m cell is a finer outline of the same
+  edge. For the fast mode the cause is visible directly: the rating curve fitted on the 60m cross-section
+  puts the water surface at 34.2–36.2 m, about 1 m below 90m's 35.0–38.0 m. On a DEM quantized to whole
+  meters, one meter of surface is one ring of valley-edge cells (§23).
+- **Wall-clock:** the 60m temporal run took 23.8 min. It ran next to the 90m control, which took 8.0 min,
+  so both figures are contended and not benchmarks. The step-count ratio of 1.73× is the robust figure. It
+  is close to the CFL expectation for the larger `dx`, (90/60)^1.5 = 1.84×.
+
+**Conclusion:** the model carries to 60m with a small loss (−0.024 temporal, −0.016 fast). The loss is
+in recall, with false alarms flat. The 0.085 calibration transfers without re-tuning, and the score
+stays registration-robust. The 60m grid is scored, not calibrated. The thesis's validated figure
+remains the 90m one, and 60m is reported as its resolution-sensitivity check. 30m is still unscored: at
+roughly 4× the 60m step count per simulated hour, a full run to the peak is a multi-hour job.
+
+**What changed in the app:** copy only. The 60m grid caption reads "Scored" instead of "Unvalidated",
+and the About page's limits note quotes the 60m scores. The live "Observed" overlay and the live
+scoring in the Results tab are still served only for the 90m grid (`GET /validation/may2024`), and
+the "Replay May 2024 flood" preset stays 90m.
 
 ---
 

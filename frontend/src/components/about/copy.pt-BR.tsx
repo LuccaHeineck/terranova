@@ -214,7 +214,7 @@ export const aboutPtBR: AboutCopy = {
 
   limitsTitle: 'Limitações que vale conhecer',
   limits: [
-    'Só a grade de 90 m é validada. As grades de 30 m e 60 m rodam o mesmo modelo com mais detalhe, mas seus resultados não são avaliados.',
+    'A grade de 90 m é a validada, e a única avaliada ao vivo no app. A grade de 60 m foi avaliada fora do app contra o mesmo evento (CSI com correção da lacuna de 0,87 no motor temporal e 0,88 no modo rápido). A grade de 30 m roda o mesmo modelo com mais detalhe, mas seus resultados não são avaliados.',
     'Os resultados validados usam a regra de 8 vizinhos (Moore). A opção de 4 vizinhos (von Neumann) existe para comparação e não é validada.',
     <>
       O mapa observado deixa de fora parte da margem de Estrela, então essas células aparecem como &ldquo;não

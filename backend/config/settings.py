@@ -160,8 +160,10 @@ FLOOD_EXTENT_VALIDATION_PROCESSED_PATH = PROCESSED_DIR / "lajeado_flood_extent_9
 # A 60m grid served live by the API alongside the 30m and 90m ones - a middle
 # ground in wall-clock time (~4x fewer cells than 30m) for interactive runs. Built
 # at startup by the same pipeline from the same raw DEM/land-cover files, like the
-# 90m grid, but unvalidated: no CSI run or gauge geolocation exists at this
-# resolution, and the documented May 2024 results stay 90m-only.
+# 90m grid. Scored against the May 2024 reference by the same scripts with
+# `--resolution 60` (gauge cell: INTERMEDIATE_GAUGE_ROW/COL below;
+# docs/tcc-deviations.md section 24), but not calibrated on it: the documented
+# validated result stays the 90m one.
 INTERMEDIATE_RESOLUTION_METERS = 60.0
 DEM_60M_PROCESSED_PATH = PROCESSED_DIR / "lajeado_estrela_z_60m.tif"
 LANDCOVER_60M_PROCESSED_PATH = PROCESSED_DIR / "lajeado_estrela_n_60m.tif"
@@ -179,6 +181,32 @@ LANDCOVER_60M_PROCESSED_PATH = PROCESSED_DIR / "lajeado_estrela_n_60m.tif"
 # real 33.66m peak stage.
 VALIDATION_GAUGE_ROW = 20
 VALIDATION_GAUGE_COL = 26
+
+# The same gauge geolocated the same way (ingestion.dem.lonlat_to_cell) on the 60m grid
+# (shape 91x96) -> row 30, col 39 (Z=28.0m, 4 cells west of the row's channel minimum at
+# col 43, i.e. on Lajeado's bank like the 90m cell). At 60m the gauge lands on the bank
+# slope rather than near the channel floor, so its WSE history is even less comparable to
+# the real stage than the 90m cell's; the coverage-gap correction only uses its bank.
+INTERMEDIATE_GAUGE_ROW = 30
+INTERMEDIATE_GAUGE_COL = 39
+FLOOD_EXTENT_60M_PROCESSED_PATH = PROCESSED_DIR / "lajeado_flood_extent_60m.tif"
+
+# Everything examples/validate_may2024.py and examples/fast_mode_may2024.py need to
+# score one grid against the May 2024 reference, keyed by `--resolution`.
+SCORED_GRIDS = {
+    90: {
+        "dem_path": DEM_VALIDATION_PROCESSED_PATH,
+        "landcover_path": LANDCOVER_VALIDATION_PROCESSED_PATH,
+        "flood_extent_path": FLOOD_EXTENT_VALIDATION_PROCESSED_PATH,
+        "gauge_cell": (VALIDATION_GAUGE_ROW, VALIDATION_GAUGE_COL),
+    },
+    60: {
+        "dem_path": DEM_60M_PROCESSED_PATH,
+        "landcover_path": LANDCOVER_60M_PROCESSED_PATH,
+        "flood_extent_path": FLOOD_EXTENT_60M_PROCESSED_PATH,
+        "gauge_cell": (INTERMEDIATE_GAUGE_ROW, INTERMEDIATE_GAUGE_COL),
+    },
+}
 
 # The Estrela-side coverage-gap correction behind the validated CSI 0.8997
 # (docs/tcc-deviations.md section 16.2) compares the SGB reference at three stages:

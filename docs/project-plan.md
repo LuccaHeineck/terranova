@@ -1239,8 +1239,8 @@ cells than 30m.
   the south outlet is found.
 - **Fast @ 60m**: 5,445 flooded cells, continuity exact (23,472.4 m³/s in and out, 0 retained), ~0.26 s of
   engine time.
-- **Unvalidated**: no CSI run or gauge geolocation exists at 60m. The documented May 2024 results and the
-  "Replay May 2024 flood" preset stay 90m-only (`docs/tcc-deviations.md` §21).
+- **Scored since** (`docs/tcc-deviations.md` §24; it was unvalidated when added): see "60m grid scored
+  against May 2024" below. The "Replay May 2024 flood" preset and the live Observed overlay stay 90m-only.
 - **Tests**: `test_api.py` has a 60m test grid. The "unserved resolution" case now uses 45, since 60 used to be
   that example.
 
@@ -1348,6 +1348,27 @@ model change.
 - **Tests:** `test_api.py` covers `GET /hydrograph` and its 503. Suite: 175/175. The frontend still has no
   tests.
 
+**60m grid scored against May 2024 — gap-only CSI 0.875 temporal, 0.880 fast, nothing re-tuned.** Full
+write-up: `docs/tcc-deviations.md` §24.
+- **How:** `examples/validate_may2024.py` and `examples/fast_mode_may2024.py` take `--resolution 60|90`
+  (default 90), driven by `settings.SCORED_GRIDS`. The gauge is geolocated at 60m with the same
+  `lonlat_to_cell` that reproduces 90m's (20, 26): it lands on (30, 39), on Lajeado's bank
+  (`settings.INTERMEDIATE_GAUGE_ROW/COL`). `validate_may2024.py` now also prints gap-only scores
+  in-script (offline `build_validation_reference`). The 90m control reproduced 789 / 47 / 42, CSI 0.8986.
+- **Results** (defaults, `outflow_fraction=0.085` from the 90m calibration):
+  - temporal 60m: gap-only 1,700 / 62 / 181, **CSI 0.875** (90m 0.899), hit rate 0.904, FAR 0.035,
+    naive 0.393. 232,908 steps (1.73× 90m), with exact mass balance asserted at every step.
+  - fast 60m: gap-only 1,708 / 60 / 173, **CSI 0.880** (90m 0.896), 168 ms, continuity exact.
+  - temporal vs. fast at 60m agree at CSI 0.948. The shift noise floor is +0.0000 gap-only. The depth
+    field is smooth, with roughness 1.24 (90m 1.68).
+- **The loss is recall, not false alarms:** FN rise (42 → 181) while FP stay level. The misses are the
+  valley-edge fringe again. The fast mode's 60m rating curve sits ~1 m lower (34.2–36.2 m against
+  35.0–38.0 m), which on the whole-meter DEM is one ring of cells.
+- **App:** copy only. The grid caption reads "Scored" / "Avaliada", and the About limits quote the 60m
+  scores. 30m is still unscored.
+- **Tests:** suite 180/180. No new tests: the change is script flags and a settings table, and the 90m
+  defaults are unchanged.
+
 To run the CA-engine PoC directly (bare-metal, unrelated to Docker): `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 
 To run the real end-to-end CSI validation against the May 2024 event (bare-metal, expect ~30 minutes):
@@ -1363,7 +1384,7 @@ for the registration-shift noise-floor check and the terrain/depth/confusion vis
 
 To run the Torres-inspired fast mode against the same event (seconds, not minutes):
 `cd backend && .venv/bin/python -m examples.fast_mode_may2024` (same raw files plus the saved stage layers;
-fully offline. `--skip-gap-correction` scores naively only, `--conveyance single_cell` reproduces §19's
+fully offline. Both scripts take `--resolution 60` to score the 60m grid instead, §24. `--skip-gap-correction` scores naively only, `--conveyance single_cell` reproduces §19's
 first result, and `--min-reach-length-m` reproduces §23's sweep).
 
 To run the full containerized stack: `docker compose up --build` from the repo root, then open `http://localhost:5173`. If

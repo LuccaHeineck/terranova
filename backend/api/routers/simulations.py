@@ -5,8 +5,8 @@ Serves the real Lajeado/Estrela grid only (loaded once at startup, see
 on `config/`, `ingestion/`, `simulation/`, `validation/` per
 `docs/ARCHITECTURE.md` (never `examples/`, which nothing else imports), and by
 this roadmap step there's already a real, ingested dataset worth serving. Three
-resolutions of it: the live 30m grid (default), an unvalidated 60m grid
-(`resolution=60`) and the 90m validation grid (`resolution=90`).
+resolutions of it: the live 30m grid (default), a 60m grid
+(`resolution=60`, scored against May 2024 too: docs/tcc-deviations.md section 24) and the 90m validation grid (`resolution=90`).
 
 A run is created via `POST /simulations` (validated parameters, no simulation
 work happens yet) and consumed exactly once via

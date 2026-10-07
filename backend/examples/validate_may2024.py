@@ -38,6 +38,12 @@ tens of thousands of engine steps / ~20 minutes wall-clock, based on an
 earlier ad-hoc 90m run through the same peak):
 
     python -m examples.validate_may2024
+
+`--resolution 60` runs the same scenario on the 60m grid instead (gauge cell
+`settings.INTERMEDIATE_GAUGE_ROW/COL`); expect roughly 4x the 90m wall-clock.
+Besides the naive scores, the run is also scored with the Estrela-gap-only
+correction (docs/tcc-deviations.md section 16.2), rebuilt offline by
+`ingestion.flood_extent.build_validation_reference`.
 """
 
 import argparse
@@ -50,7 +56,7 @@ import numpy as np
 
 from config import settings
 from ingestion.dem import build_elevation_matrix
-from ingestion.flood_extent import build_observed_flood_mask
+from ingestion.flood_extent import build_observed_flood_mask, build_validation_reference
 from ingestion.hydrograph import (
     build_hydrograph,
     discharge_to_inflow,
@@ -66,7 +72,7 @@ from simulation.engine import (
     outflow_fraction_for_dt,
     step,
 )
-from validation.metrics import csi, false_alarm_rate, hit_rate
+from validation.metrics import confusion_counts, csi, false_alarm_rate, hit_rate
 
 # A cell counts as "flooded" above this depth - a documented wet-cell cutoff
 # avoiding float-residue false positives (H is real physical meters here, per
@@ -227,6 +233,7 @@ def _run_to_peak(
     save_masks: Path | None = None,
     depth_png: Path | None = None,
     neighborhood: str = "moore",
+    resolution: int = int(settings.VALIDATION_RESOLUTION_METERS),
 ) -> None:
     """`outlet_drop_m` overrides `find_boundary_outlet`'s `drop_m` (the outlet's
     fixed drainage margin) when given - a single, isolated lever for exploratory
@@ -255,15 +262,11 @@ def _run_to_peak(
     later noise-floor check or plot doesn't need to re-run the simulation. All
     three are no-ops when omitted.
     """
-    Z = build_elevation_matrix(
-        processed_path=settings.DEM_VALIDATION_PROCESSED_PATH,
-        resolution=settings.VALIDATION_RESOLUTION_METERS,
-    )
-    N = build_roughness_matrix(
-        reference_path=settings.DEM_VALIDATION_PROCESSED_PATH,
-        processed_path=settings.LANDCOVER_VALIDATION_PROCESSED_PATH,
-    )
-    print(f"grid shape at {settings.VALIDATION_RESOLUTION_METERS:.0f}m resolution: {Z.shape}")
+    grid = settings.SCORED_GRIDS[resolution]
+    dx = float(resolution)
+    Z = build_elevation_matrix(processed_path=grid["dem_path"], resolution=dx)
+    N = build_roughness_matrix(reference_path=grid["dem_path"], processed_path=grid["landcover_path"])
+    print(f"grid shape at {dx:.0f}m resolution: {Z.shape}")
 
     hydrograph = build_hydrograph()
     inflow_mask = find_boundary_inflow_mask(Z, settings.HYDROGRAPH_INFLOW_EDGE)
@@ -272,7 +275,6 @@ def _run_to_peak(
         Z, N, settings.HYDROGRAPH_OUTLET_EDGE, **outlet_kwargs
     )
 
-    dx = settings.VALIDATION_RESOLUTION_METERS
     cell_area_m2 = dx**2
 
     H = np.zeros_like(Z)
@@ -299,7 +301,7 @@ def _run_to_peak(
     cumulative_outflow = 0.0
     t = 0
 
-    gauge_row, gauge_col = settings.VALIDATION_GAUGE_ROW, settings.VALIDATION_GAUGE_COL
+    gauge_row, gauge_col = grid["gauge_cell"]
     elapsed_time_history = [0.0]
     wse_history = [float(Z[gauge_row, gauge_col] + H[gauge_row, gauge_col])]
 
@@ -374,7 +376,9 @@ def _run_to_peak(
     print(f"checkerboard roughness (final H, lower=smoother): {checkerboard_roughness:.5f}")
 
     simulated_mask = H > _FLOODED_DEPTH_THRESHOLD_M
-    observed_mask = build_observed_flood_mask(reference_path=settings.DEM_VALIDATION_PROCESSED_PATH)
+    observed_mask = build_observed_flood_mask(
+        reference_path=grid["dem_path"], processed_path=grid["flood_extent_path"]
+    )
 
     print(f"simulated flooded cells: {simulated_mask.sum()} of {simulated_mask.size} ({100 * simulated_mask.mean():.1f}%)")
     print(f"observed flooded cells:  {observed_mask.sum()} of {observed_mask.size} ({100 * observed_mask.mean():.1f}%)")
@@ -385,6 +389,18 @@ def _run_to_peak(
     print(f"Hit Rate:         {hit_rate_value:.3f}")
     print(f"False Alarm Rate: {false_alarm_rate_value:.3f}")
 
+    _, excluded = build_validation_reference(
+        Z, reference_path=grid["dem_path"], gauge_row=gauge_row, gauge_col=gauge_col
+    )
+    valid = ~excluded
+    gap_tp, gap_fp, gap_fn = confusion_counts(simulated_mask[valid], observed_mask[valid])
+    gap_only_csi = csi(simulated_mask[valid], observed_mask[valid])
+    gap_only_hit_rate = hit_rate(simulated_mask[valid], observed_mask[valid])
+    gap_only_far = false_alarm_rate(simulated_mask[valid], observed_mask[valid])
+    print(f"Estrela-gap-only ({int(excluded.sum())} cells excluded): TP/FP/FN {gap_tp}/{gap_fp}/{gap_fn}")
+    print(f"gap-only CSI:              {gap_only_csi:.4f}")
+    print(f"gap-only Hit Rate / FAR:   {gap_only_hit_rate:.3f} / {gap_only_far:.3f}")
+
     if results_json is not None:
         results_json.parent.mkdir(parents=True, exist_ok=True)
         results_json.write_text(
@@ -393,10 +409,15 @@ def _run_to_peak(
                     "outlet_drop_m": outlet_drop_m,
                     "outflow_fraction": base_outflow_fraction,
                     "neighborhood": neighborhood,
+                    "resolution_m": resolution,
                     "seed_baseflow_depth": seed_baseflow_depth,
                     "csi": csi_value,
                     "hit_rate": hit_rate_value,
                     "false_alarm_rate": false_alarm_rate_value,
+                    "gap_only_tp_fp_fn": [gap_tp, gap_fp, gap_fn],
+                    "gap_only_csi": gap_only_csi,
+                    "gap_only_hit_rate": gap_only_hit_rate,
+                    "gap_only_false_alarm_rate": gap_only_far,
                     "steps": t,
                     "elapsed_days": elapsed_time / 86400,
                     "wall_clock_min": wall_clock / 60,
@@ -423,6 +444,7 @@ def _run_to_peak(
             save_masks,
             simulated_mask=simulated_mask,
             observed_mask=observed_mask,
+            excluded_mask=excluded,
             Z=Z,
             H=H,
             outlet_drop_m=np.nan if outlet_drop_m is None else outlet_drop_m,
@@ -507,6 +529,13 @@ def _parse_args() -> argparse.Namespace:
             "optional 4-neighbor variant compared in docs/tcc-deviations.md section 22."
         ),
     )
+    parser.add_argument(
+        "--resolution",
+        type=int,
+        choices=sorted(settings.SCORED_GRIDS),
+        default=int(settings.VALIDATION_RESOLUTION_METERS),
+        help="Grid to run and score (default 90, the validated one; 60 is the intermediate live grid).",
+    )
     return parser.parse_args()
 
 
@@ -544,6 +573,7 @@ def main() -> None:
         save_masks=args.save_masks,
         depth_png=args.depth_png,
         neighborhood=args.neighborhood,
+        resolution=args.resolution,
     )
 
 
