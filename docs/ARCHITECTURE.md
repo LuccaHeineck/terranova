@@ -214,7 +214,8 @@ flat color), since its depths are not calibrated. A "Replay May 2024 flood" pres
 the validated scenario in one click: fast, then temporal to the peak, on the 90m grid, in Compare. A temporal run's frames are
 kept client-side as `Float32Array`s in a bounded, decimated buffer (`rendering/frameBuffer.ts`) that lives on its
 layer, so a timeline (`hooks/useTimeline.ts`, `components/Timeline.tsx`) can re-render any past frame without
-re-running; it drives the temporal pane only. In seeded-pool mode a click on the map places the seed marker
+re-running; it drives the temporal pane only. Replay plays the buffer at 1x / 4x / 16x (8 frames a second at 1x);
+past 32 drawn frames a second it skips frames rather than repaint each one. In seeded-pool mode a click on the map places the seed marker
 (`hooks/useRunSetup.ts` owns engine/scenario/grid/marker and clears the marker on a grid or mode change); the
 grid's true outline comes from `GET /grids` so clicks outside it are rejected before any run, and the backend
 converts the marker's lat/lon to a cell itself (`ingestion/dem.py`'s `lonlat_to_cell`, through the grid's real
@@ -226,8 +227,10 @@ Start/Stop button, which submits the setup form from outside it through `form="r
 Every tab panel stays mounted and is only hidden: `ConfigPanel` keeps its fields in local state, which would reset
 on unmount, and Start needs the form to exist. Starting a run switches to Results; the top bar's panel button
 collapses the panel to give the map the full width, and below 900px it is a drawer over the map. The map's view
-switch (Temporal / Fast / Compare, and the temporal product under it) sits at its top center; one Layers menu
-holds the basemap, the observed / terrain / roughness overlays and the overlay opacity, next to an Export menu.
+switch (Temporal / Fast / Compare, and the temporal product under it) sits at its top center (top left below
+640px, clear of the buttons); one Layers menu holds the basemap, the observed / terrain / roughness overlays and
+the overlay opacity, next to an Export menu. Below 640px Compare stacks its two panes instead of splitting the
+width, and the top bar's run status shrinks to its dot.
 About is a page, not a panel: `AboutPage` (project introduction and user guide) covers the map, which stays
 mounted and `inert` under it so a run keeps streaming. Its quoted results (CSI, run times) are hand-kept constants
 in `components/about/content.ts`.
@@ -295,6 +298,21 @@ received frame rather than from the thinned timeline buffer: an arrival-time map
 (`rendering/mapSnapshot.ts`, composited from Leaflet's own DOM layers) or the flooded extent as GeoJSON
 (`geo/extentGeoJson.ts`). The Results tab charts the gauge record from `GET /hydrograph`.
 
+Consecutive flood frames crossfade (`MapPane`): the next image loads under the current one, and one
+`requestAnimationFrame` clock moves both opacities so they always sum to 1. The images sit in their own
+isolated pane, blended `plus-lighter` (`.flood-frame` in `index.css`), and the overlay opacity is set once on
+that pane, so a cell wet in both frames keeps its strength mid-fade. A fade lasts 220 ms, or 0.8 of the gap
+since the last frame when frames come faster; under 60 ms, or with `prefers-reduced-motion`, the image is
+just swapped. It is a blend of two real frames, never an interpolated depth. While the view is still the
+automatic fit to the grid (the user hasn't touched that pane), a pane refits when it resizes, e.g. when the
+timeline appears under it.
+
+Smoke tests live in `frontend/e2e/` (Playwright, `npm run test:e2e`). They drive the real backend, so they
+need `data/`: Setup, the May 2024 replay and Stop, seeding, the basemap picker, timeline playback speeds,
+and Compare at phone width. `playwright.config.ts` starts uvicorn and Vite, or reuses running ones;
+`E2E_BASE_URL` points the tests at another deployment, e.g. `docker compose up`. They check that the app
+works, not the model's numbers, which are the backend suite's job.
+
 What does NOT belong here: any backend logic. The frontend only ever calls `backend/api/`'s HTTP/WebSocket
 contract; it never imports Python code or reads `data/` directly.
 
@@ -322,6 +340,12 @@ file. No code.
   substep bound, only converged up to `VON_NEUMANN_MAX_OUTFLOW_FRACTION`, which `api/` enforces); the Moore default is bit-identical to the engine before the option existed, pinned by
   `tests/test_engine_regression.py` against a frozen copy (`tests/engine_moore_reference.py`) —
   `docs/tcc-deviations.md` §22. The fast engine stays Moore-only.
+- **`backend/simulation/engine_loops.py`** and **`backend/simulation/engine_cupy_fused.py`** — benchmark-only
+  alternatives to `engine.step` for step 11's performance comparisons (`docs/tcc-deviations.md` §25). The first
+  is cell by cell in plain Python, the second runs two CUDA kernels per substep and imports CuPy lazily. Both
+  are bit-identical to `engine.step` (`tests/test_engine_loops.py`, `tests/test_engine_cupy_fused.py`), and
+  nothing in `api/` imports them. They are timed by `examples/benchmark_scaling.py` and `--backend cupy-fused`
+  in `examples/benchmark_backends.py`.
 - **`backend/examples/poc_grid.py`** — builds a synthetic bowl-plus-hill terrain, seeds a pool of water,
   runs `simulation.engine.step` in a loop for a fixed number of iterations, asserting mass conservation
   and non-negative depth after every step, then plots terrain vs. depth at several snapshots in time
@@ -401,7 +425,7 @@ Think of it in three layers:
 - A new setting, file path, or tunable parameter → `backend/config/`
 - A one-off script exploring/demonstrating engine behavior → `backend/examples/`
 - A reusable CLI tool for project operations (e.g. downloading a DEM tile) → `backend/scripts/`
-- A new automated test → `backend/tests/`
+- A new automated test → `backend/tests/` (a browser-level smoke test of the app → `frontend/e2e/`)
 - A new raw or processed data file → `data/raw/` or `data/processed/`
 - Anything React/Leaflet/UI → `frontend/`
 - A roadmap or academic-context update → `docs/`

@@ -67,7 +67,8 @@ export default function App() {
   }
 
   return (
-    <div className="grid h-screen grid-rows-[56px_minmax(0,1fr)] overflow-hidden bg-canvas text-ink">
+    // minmax(0, 1fr): the column is the viewport's width, never the top bar's content width.
+    <div className="grid h-screen grid-cols-[minmax(0,1fr)] grid-rows-[56px_minmax(0,1fr)] overflow-hidden bg-canvas text-ink">
       <TopBar
         status={run.status}
         gridShape={run.gridShape}

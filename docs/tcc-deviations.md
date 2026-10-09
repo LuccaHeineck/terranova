@@ -468,7 +468,8 @@ regardless of run order.
 - **GPU/CuPy performance benchmarking** — TCC1's stack rationale names CuPy-compatibility as a design
   goal; the NumPy code has been kept vectorized/CuPy-compatible throughout, but nothing has actually
   been run on a GPU yet. *(Since done, first pass: see §18 - CuPy is kernel-launch-bound on this
-  project's grids, 5x slower at 90m and ~2x faster at 30m; a fused-kernel substep is the open follow-up.)* Roadmap step 11 (see section 13 above for the CPU-side investigation attempted
+  project's grids, 5x slower at 90m and ~2x faster at 30m. The fused-kernel substep it recommended is built and
+  bit-identical, see §25.)* Roadmap step 11 (see section 13 above for the CPU-side investigation attempted
   first, which found the real bottleneck is the substep decomposition, not something GPU parallelism
   alone would fix, given it's dominated by the same fixed-count sequential dependency regardless of
   where each pass executes).
@@ -838,7 +839,7 @@ the API.
 A naive NumPy -> CuPy array swap adds nothing at 90m and ~2x at 30m, which does not justify a full
 migration or live-API integration as-is. The GPU follow-up worth trying is a fused single-kernel substep
 (one CuPy `ElementwiseKernel`/`RawKernel` per pass), which targets the launch overhead that dominates
-here. It is relevant only at 30m or finer.
+here. It is relevant only at 30m or finer. *(Since built: two kernels per substep, bit-identical to NumPy, see §25.)*
 
 ---
 
@@ -1454,6 +1455,187 @@ roughly 4× the 60m step count per simulated hour, a full run to the peak is a m
 and the About page's limits note quotes the 60m scores. The live "Observed" overlay and the live
 scoring in the Results tab are still served only for the 90m grid (`GET /validation/may2024`), and
 the "Replay May 2024 flood" preset stays 90m.
+
+---
+
+## 25. Performance comparisons (step 11): loops vs. NumPy, scaling, and a fused GPU substep
+
+**TCC1:** the validation plan (`docs/tcc-summary.md`, "Performance") promises three comparisons: run time
+and memory vs. grid size and iteration count, vectorized NumPy vs. naive Python loops (the argument for
+NumPy: it "avoids explicit Python loops over cells"), and exploratory GPU (CuPy) benchmarks. Before this
+section only the GPU one had been tried (§18), which left one follow-up open: a fused single-kernel
+substep. This section adds the tooling for all three.
+
+**Fairness rule: bit-identical before timed.** Each alternative implementation of `engine.step` is first
+shown to produce *exactly* the same `H` as the live engine, with `np.array_equal` and not `allclose`,
+and only then is it timed. §18 found that the engine amplifies one ulp into ~0.2 m within ~50 steps,
+so "close" results would not show that two implementations compute the same model.
+
+**What was built:**
+- **`simulation/engine_loops.py`**: the same `step()` (same signature and validation), computed cell by cell
+  in plain Python on nested lists. Lists were chosen with the user over scalar-indexed NumPy arrays: they
+  are the fastest honest pure-Python form, so the measured speedup is a conservative one. Bit-identity
+  comes from matching `_single_update`'s IEEE operation order: weights are summed in offset order, and
+  incoming outflow is *gathered* per destination cell in offset order, the order the vectorized
+  per-offset `inflow[...] += outflow` adds the terms in. `compute_stable_dt` is not ported, because
+  `step()` is ~95% of a macro step (§13's profile).
+- **`simulation/engine_cupy_fused.py`**: the same `step()` for CuPy arrays, with each substep as **two
+  CUDA kernels** (per-cell release and weight sum, then a per-cell gather and update) instead of ~80
+  elementwise launches. Kernel 2 recomputes the neighbor's weight toward the cell rather than storing 8
+  weights per cell, using the same operands in the same order. The kernels are compiled with
+  `--fmad=false`.
+- **`examples/benchmark_scaling.py`**: the sweep. Synthetic square valleys (32² to 2048², the
+  regression test's valley scaled up) and the real 90/60/30m grids, each spun up wet, then timed for
+  `step()` alone at the default `0.085` (9 substeps) and, on NumPy, the full macro step. Each case gets
+  warm-up calls and 3 repeats. Memory is the tracemalloc peak of one `step()` for NumPy and the loops
+  (both are traced) and the memory pool for CuPy. `--iterations` adds cumulative wall-clock (untraced) and
+  tracemalloc memory (traced) at checkpoints from a dry grid. Every loop and fused case asserts parity
+  with NumPy in-script before it is timed. The script writes `--results-json` and a log-log `--plot`.
+- **`examples/benchmark_backends.py --backend cupy-fused`**: the real May 2024 run to the peak on the fused
+  engine.
+
+**Parity evidence** (`tests/test_engine_loops.py`, `tests/test_engine_cupy_fused.py`, all exact at every step):
+- Loops: a closed bowl at 1, 9 and 50 substeps, and the open valley (CFL dt, inflow, outlet), each under
+  both neighborhoods. 9 tests, all bit-identical.
+- Fused CuPy: the same scenarios (100 closed steps and 500 open steps), plus a non-square grid with
+  default walls. dt is computed on the host by NumPy and fed to both engines, to exclude §18's
+  cross-backend `compute_stable_dt` ulp. 9 tests, all bit-identical.
+- **Both tests fail when they should** (negative controls):
+  - A source-major *scatter* version of the loop engine drifts 6.5 mm from NumPy within 30 steps.
+  - Compiling the fused kernels without `--fmad=false` diverges at step 1 (18 mm by step 100).
+  - So the gather order and the FMA flag are both required, not incidental.
+- At 90m over 1,000 real steps, the fused trajectory matches plain CuPy's exactly
+  (`H.sum()` 1649.907899 for both).
+
+**Measurements** (`examples/benchmark_scaling.py` with all four backends and `--iterations 10 100 1000
+10000`; same hardware as §18: i7-13620H, RTX 4050 Laptop GPU; Python 3.14.5, NumPy 2.5.3, CuPy 14.2,
+float64). Taken uncontended: a 2,000-step 90m NumPy check just before measured 3.08 ms/step p50,
+against §18's 3.2 ms. A first attempt in the same session ran next to a game, measured NumPy at
+~18 ms/step, and was discarded. All figures are `step()` medians at `outflow_fraction=0.085`
+(9 substeps), over 3 repeats of up to 50 calls (loops: 3 calls), from a spun-up wet state.
+
+*Vectorized NumPy vs. plain Python loops* (both bit-identical, checked in-script before timing):
+
+| grid | cells | loops (ms) | NumPy (ms) | NumPy speedup |
+|---|---|---|---|---|
+| synthetic 32² | 1,024 | 38.9 | 1.46 | 27× |
+| synthetic 64² | 4,096 | 157 | 2.84 | 55× |
+| synthetic 128² | 16,384 | 650 | 8.49 | 77× |
+| synthetic 256² | 65,536 | 2,744 | 56.7 | 48× |
+| **real 90m** | 3,904 | 155 | 2.83 | **55×** |
+| **real 60m** | 8,736 | 354 | 5.03 | **71×** |
+| **real 30m** | 35,136 | 1,460 | 20.1 | **72×** |
+
+- The loops are linear in cells: 38–42 µs per cell per step, i.e. ~4.5 µs per cell per substep.
+- NumPy's per-cell cost is not constant, so the ratio is not either:
+  - On the smallest grid it is 1.43 µs per cell. The ~720 array calls per step have a fixed overhead
+    of about 1.3 ms.
+  - Between 4k and 35k cells it falls to 0.52–0.73 µs per cell. This is where the ratio peaks, at
+    55–77×, and it is the range all three real grids fall in.
+  - Above that it rises to 0.87 µs at 65k cells and 1.6–1.7 µs from 262k cells on. This is consistent
+    with the per-step working set (below) outgrowing the CPU's 24 MB L3 cache; it was not profiled.
+- So vectorization buys **55–72× on this project's real grids**. This is the measured basis for TCC1's
+  "avoids explicit Python loops over cells", and it is conservative, because the loops run on lists
+  rather than on NumPy scalars.
+
+*Run time vs. grid size, all backends* (`step()` p50 ms; NumPy macro step = `compute_stable_dt` +
+`outflow_fraction_for_dt` + `step`, with no per-step checks):
+
+| grid | cells | NumPy | NumPy macro | CuPy | CuPy fused |
+|---|---|---|---|---|---|
+| synthetic 32² | 1,024 | 1.46 | 1.55 | 16.7 | 1.23 |
+| synthetic 64² | 4,096 | 2.84 | 3.32 | 17.0 | 1.75 |
+| synthetic 128² | 16,384 | 8.49 | 9.24 | 16.3 | 2.71 |
+| synthetic 256² | 65,536 | 56.7 | 57.4 | 15.4 | 5.82 |
+| synthetic 512² | 262,144 | 418 | 447 | 16.1 | 19.7 |
+| synthetic 1024² | 1,048,576 | 1,717 | 1,845 | 78.7 | 72.3 |
+| synthetic 2048² | 4,194,304 | 7,153 | 7,623 | 390 | 282 |
+| real 90m | 3,904 | 2.83 | 3.08 | 15.6 | 1.52 |
+| real 60m | 8,736 | 5.03 | 5.33 | 16.4 | 1.83 |
+| real 30m | 35,136 | 20.1 | 21.6 | 17.0 | 4.02 |
+
+- **NumPy** scales close to linearly from 16k cells on (×4 cells → ×4.0–6.7 time). `compute_stable_dt`
+  adds 3–10% on top of `step()`, consistent with §13's ~95% figure.
+- **Plain CuPy reproduces §18**: it stays at 15–17 ms up to 262k cells, so it is launch-bound. It
+  overtakes NumPy at about the 30m grid's size (17.0 vs. 20.1 ms) and is 18–26× faster than NumPy at
+  ≥1M cells.
+- **The fused substep removes the launch floor:**
+  - Up to 65k cells it takes 1.2–5.8 ms, which is 2.6–14× faster than plain CuPy.
+  - On the real grids it is 1.9× (90m), 2.7× (60m) and 5.0× (30m) faster than NumPy.
+  - At 512² it is *slower* than plain CuPy (19.7 vs. 16.1 ms). At 1M and 4M cells it is ahead again,
+    by 1.09× and 1.38×.
+  - A likely reason, not verified with a profiler: once launch overhead is gone, the fused kernels are
+    float64-arithmetic-bound. GeForce GPUs run FP64 at a small fraction of their FP32 rate, and the
+    gather recomputes each neighbor weight, doing twice the `sqrt`/divides of the unfused path.
+    Either way, fusion is a win on every grid this project actually runs.
+
+*Memory vs. grid size* (tracemalloc peak of one `step()` above its starting allocation; CuPy: memory
+pool in use after a step, which holds the device-resident arrays, not the transient peak):
+
+| | per cell | 90m | 30m | 2048² |
+|---|---|---|---|---|
+| model arrays (Z, N, H, padded Z/N) | 40 B | 0.16 MB | 1.42 MB | 168 MB |
+| NumPy `step()` transient peak | 161–177 B | 0.67 MB | 5.74 MB | 676 MB |
+| loops `step()` transient peak | 511–531 B | 2.03 MB | 17.9 MB | (not run) |
+| CuPy pool in use (both variants) | 48–51 B | 0.19 MB | 1.70 MB | 201 MB |
+
+- NumPy's transient peak is ~20 float64 arrays per cell (the 8 per-offset weight arrays plus
+  temporaries) and is linear in cells.
+- The loops use ~3× more, because Python float objects and list slots cost more than packed float64.
+- Memory is not a constraint at any size this project runs. Even the 30m grid's peak is under 6 MB.
+
+*Run time and memory vs. iteration count* (NumPy, full macro steps from a dry grid at the start of the
+May 2024 event; wall-clock from an untraced run, memory from a second, traced run):
+
+| steps | 90m wall | 60m wall | 30m wall | traced current / peak (90m · 60m · 30m) |
+|---|---|---|---|---|
+| 10 | 0.03 s | 0.06 s | 0.22 s | 0.03/0.73 · 0.07/1.63 · 0.28/6.31 MB |
+| 100 | 0.32 s | 0.56 s | 2.18 s | same |
+| 1,000 | 3.20 s | 5.62 s | 21.8 s | same |
+| 10,000 | 32.2 s | 56.4 s | 218 s | same |
+
+- Run time is linear in iterations to within 1% per decade.
+- Traced memory is identical at every checkpoint, so memory does not grow per step. The "current"
+  figure is just `H` itself.
+- Projected NumPy time to the May 2024 peak, from the macro-step medians:
+  - 90m: 134,639 steps × 3.08 ms = **6.9 min**. §18 measured 7.6 min, with mass-balance checks every
+    step.
+  - 60m: 232,908 × 5.33 ms = **20.7 min**. §24's 23.8 min was contended.
+  - 30m: ~659k steps × 21.6 ms ≈ **4.0 h**. This is an *estimate*: the step count is projected from
+    60m by (60/30)^1.5, and 30m has never been run to the peak.
+
+*The fused engine on the real event* (`benchmark_backends.py --resolution 90 --backend cupy-fused`, to the
+peak, mass balance asserted at every step):
+- **Same outcome as NumPy:** 134,634 steps (NumPy: 134,639), 1,955 flooded cells, naive CSI 0.395, hit
+  rate 0.949. That is §18's TP + FP of 789 + 1,166 and §18's CSI. The 5-step difference is §18's
+  cross-backend `compute_stable_dt` ulp, judged on outcomes as §18 prescribes. `step()` itself is
+  bit-identical.
+- **End-to-end, the win is small at 90m:** 6.72 min, at a macro-step p50 of 2.83 ms.
+  The NumPy run in the same session took **7.22 min** (134,639 steps, macro p50 3.08 ms, same per-step
+  checks), so the fused GPU is **1.07x** faster end to end. Both runs reproduce §18 exactly (step
+  count, 1,955 flooded cells, CSI 0.395).
+- **The reason is measured:** `step()` alone went 2.83 → 1.52 ms, but the rest of a GPU macro step costs
+  ~1.3 ms. That rest is `compute_stable_dt` (still unfused elementwise kernels, plus its `float()`
+  sync), the `cp.any` validation inside `step()`, and the benchmark's own per-step mass-check syncs.
+
+**Conclusion.**
+- The thesis's three promised comparisons are now measured.
+- **Vectorization is a 55–72× speedup** over equivalent, bit-identical plain-Python loops on the real
+  grids.
+- **Run time and memory both scale linearly** with grid size (above the small-grid overhead) and with
+  iteration count, and memory is flat over iterations. The engine needs ~200 B per cell at peak.
+- **The fused GPU substep** that §18 recommended is bit-identical to NumPy:
+  - It makes `step()` 1.9–5.0× faster than NumPy on the real grids, and up to 14× faster than plain
+    CuPy.
+  - At 90m the end-to-end gain is capped by the remaining unfused `compute_stable_dt`.
+  - A fused dt reduction (one kernel plus one reduction) is therefore the next GPU lever. It matters
+    most at 30m, where `step()` dominates more. It has not been attempted.
+- None of this changes the model or any validated number. The live API still runs the NumPy engine.
+
+The figure for the results chapter is regenerated by
+`python -m examples.benchmark_scaling --backends numpy loops cupy cupy-fused --iterations 10 100 1000 10000
+--results-json scaling.json --plot scaling.png` (about 15 minutes uncontended), a log-log plot of ms per
+`step()` vs. cells per backend, with the three real grids marked.
 
 ---
 

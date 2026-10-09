@@ -179,8 +179,8 @@ export const aboutPtBR: AboutCopy = {
               <Ui>Lâmina máx.</Ui> escolhem o que o mapa temporal mostra.
             </li>
             <li>
-              A <Strong>linha do tempo</Strong>, sob o mapa temporal, percorre e reproduz os quadros recebidos até agora;{' '}
-              <Ui>Ir para o mais recente</Ui> volta a acompanhar a simulação.
+              A <Strong>linha do tempo</Strong>, sob o mapa temporal, percorre e reproduz os quadros recebidos até agora,
+              em <Ui>1×</Ui>, <Ui>4×</Ui> ou <Ui>16×</Ui>; <Ui>Ir para o mais recente</Ui> volta a acompanhar a simulação.
             </li>
             <li>
               <Ui>Camadas</Ui> (no alto, à direita) troca o mapa base e a opacidade da sobreposição.{' '}

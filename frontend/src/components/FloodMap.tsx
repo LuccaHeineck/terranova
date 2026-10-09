@@ -565,8 +565,13 @@ export function FloodMap({
 
   return (
     <div ref={rootRef} className="relative flex h-full w-full flex-col">
-      {/* The primary pane stays mounted across view changes; Compare adds the fast pane beside it. */}
-      <div className={`relative grid min-h-0 w-full flex-1 ${compare ? 'grid-cols-2 gap-px bg-line' : 'grid-cols-1'}`}>
+      {/* The primary pane stays mounted across view changes; Compare adds the fast pane beside it, or under it on a
+          phone, where two side-by-side panes are too narrow for their legends. */}
+      <div
+        className={`relative grid min-h-0 w-full flex-1 ${
+          compare ? 'grid-rows-2 gap-px bg-line sm:grid-cols-2 sm:grid-rows-1' : 'grid-cols-1'
+        }`}
+      >
         <MapPane
           bounds={bounds}
           imageUrl={observedUrl ?? (primary === 'fast' ? fastUrl : temporalUrl)}
@@ -616,10 +621,11 @@ export function FloodMap({
 
       {/* The timeline sits under the temporal pane only: the fast mode has a single frame to show. */}
       {showsTemporal && timeline.frame && (
-        <div className={`anim-fade grid w-full ${compare ? 'grid-cols-2 gap-px bg-line' : 'grid-cols-1'}`}>
+        <div className={`anim-fade grid w-full ${compare ? 'gap-px bg-line sm:grid-cols-2' : 'grid-cols-1'}`}>
           <Timeline timeline={timeline} compare={compare} />
+          {/* Stacked on a phone, the panes leave no column for the note; the fast pane's own label says as much. */}
           {compare && (
-            <div className="flex items-center justify-center border-t border-line bg-surface p-3 text-center text-xs text-ink-muted">
+            <div className="hidden items-center justify-center border-t border-line bg-surface p-3 text-center text-xs text-ink-muted sm:flex">
               {t.map.compareFastNote}
             </div>
           )}
@@ -635,9 +641,10 @@ export function FloodMap({
         </div>
       )}
 
-      {/* Top center: what is drawn. The view, then (for the temporal pane) which of its products. */}
+      {/* Top center: what is drawn. The view, then (for the temporal pane) which of its products. On a phone, top
+          left, so it clears the Export and Layers buttons. */}
       {(available.temporal || available.fast || seedNotice) && (
-        <div className="anim-fade absolute top-3 left-1/2 z-1000 flex -translate-x-1/2 flex-col items-center gap-1.5">
+        <div className="anim-fade absolute top-3 left-3 z-1000 flex flex-col items-start gap-1.5 sm:left-1/2 sm:-translate-x-1/2 sm:items-center">
           {(available.temporal || available.fast) && (
           <div role="group" aria-label={t.map.mapView} className="float-card flex gap-0.5 rounded-xl p-1 text-[13px]">
             {VIEWS.map((v) => (

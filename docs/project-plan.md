@@ -1340,6 +1340,7 @@ model change.
     overlay's axis-aligned envelope.
 - **Known gap:** on a narrow map in Compare, the bottom-right controls cover part of the fast pane's legend
   (the basemap picker already did, a little). It belongs with the open narrow-screen Compare fix below.
+  *(Since fixed — see "Frontend backlog closed" below.)*
 - **Checked in a browser** (headless Chrome, a 90m gauge-driven run stopped at t = 16.8 h, plus fast, in
   Compare): every layer, the opacity slider and both exports work, with no page errors.
   - The GeoJSON is valid in shapely, with counter-clockwise exteriors. Its area is ~426 cells against 427
@@ -1369,6 +1370,73 @@ write-up: `docs/tcc-deviations.md` §24.
 - **Tests:** suite 180/180. No new tests: the change is script flags and a settings table, and the 90m
   defaults are unchanged.
 
+**Frontend backlog closed: playback speed, frame crossfade, phone-width Compare, Playwright smoke tests.**
+Frontend only; no API, engine or model change.
+- **Playback speed:** a 1× / 4× / 16× button next to Play. 1× is the previous 8 frames a second. Past 32 drawn
+  frames a second the replay skips buffered frames instead of repainting each one, so 16× advances 4 per tick.
+- **Smoother frame-to-frame transitions:** consecutive overlay images crossfade (`MapPane`). Only two real
+  frames are blended; no depth is interpolated. One `requestAnimationFrame` clock drives both opacities so they
+  sum to 1. The images add up `plus-lighter` in their own isolated pane, and the overlay opacity is now the
+  pane's, so a cell wet in both frames doesn't dip mid-fade.
+  - The fade lasts 220 ms, or 0.8 of the gap since the last frame. Under 60 ms (4× and up), or with
+    reduced motion, the image is swapped.
+  - CSS transitions were tried first and dropped: a freshly loaded image's transition started frames
+    late, so the sum dipped.
+- **Phone-width Compare** (the "Narrow-screen Compare fix" below). The old description no longer matched the
+  redesigned layout. Measured in headless Chrome at 375–899 px:
+  - **Cause 1:** while a run was going, the top bar's run-status pill pushed the page to 441 px, so the
+    Layers and Stop buttons left the screen at phone width. Now the page grid's column is the viewport's
+    width, and below 640 px the pill shrinks to its dot (the label stays for screen readers).
+  - **Cause 2:** below 640 px, Compare stacks its panes instead of halving the width; the side-by-side legends
+    had run into each other and hidden the zoom controls. The view switch moves to the top left there, clear
+    of Export and Layers.
+  - **A pre-existing bug, found on the way:** the grid was fitted before the timeline appeared under the
+    map, so on the first Compare the grid spilled past the shrunken panes (reopening Compare refit it). A
+    pane whose view is still the automatic fit now refits when it resizes; any pan, zoom or click hands the
+    view to the user.
+  - At 641 px, the narrowest side-by-side width, both legends clear the zoom controls in English and
+    Portuguese. That closes the "Known gap" from the flood-map products entry.
+- **Playwright smoke tests** (`frontend/e2e/smoke.spec.ts`, `npm run test:e2e`), 6 tests: a 90m seeded pool runs
+  to 40/40 frames with its volume still 400.0; the May 2024 replay opens Compare and Stop stops it; seeding
+  inside and outside the grid; the basemap picker applies and is remembered; replay at each speed ends on one
+  overlay image; Compare at 375 px stacks, fits the grid and doesn't overflow. They run against the real
+  backend, so they need `data/`. `playwright.config.ts` starts uvicorn and Vite, or reuses running ones;
+  `E2E_BASE_URL` targets another deployment. The narrow-screen test was checked to fail with the refit
+  disabled. 6/6 passing in ~15 s.
+- Also marked done in the backlog: model-input layers and the click-a-cell inspector (shipped in `627ce77`;
+  see `docs/ARCHITECTURE.md`), and terrain shading under the flood (the Relief basemap's hillshade, plus the
+  Terrain input layer).
+
+**Step 11 — the TCC's three performance comparisons, measured.** `docs/tcc-summary.md` promises run
+time/memory vs. grid size and iteration count, vectorized NumPy vs. naive loops, and exploratory GPU work.
+Before this entry only the GPU part (§18) existed. Full write-up with tables: `docs/tcc-deviations.md` §25.
+- **What was built:**
+  - `backend/simulation/engine_loops.py`, a cell-by-cell `step()` on nested Python lists.
+  - `backend/simulation/engine_cupy_fused.py`, two CUDA kernels per substep instead of ~80 launches,
+    compiled `--fmad=false`.
+  - Both are **bit-identical** to `engine.step` (`tests/test_engine_loops.py`, `tests/test_engine_cupy_fused.py`,
+    9 tests each, exact at every step). Negative controls confirmed the tests catch a reordered sum or
+    FMA contraction.
+  - The sweep, `backend/examples/benchmark_scaling.py`, and `benchmark_backends.py --backend cupy-fused`.
+- **Vectorized NumPy vs. loops: 55× (90m), 71× (60m), 72× (30m)**, and 27–77× across synthetic grids.
+  The loops cost a flat ~40 µs per cell per step. NumPy's per-cell cost is lowest in the real grids'
+  size range.
+- **Scaling:**
+  - NumPy `step()` takes 2.8 / 5.0 / 20.1 ms at 90 / 60 / 30m and is linear in cells beyond ~16k.
+  - Its transient memory is ~170 B per cell (0.7 MB at 90m, 5.7 MB at 30m).
+  - Run time is linear in iterations (90m: 0.32 s per 100 steps → 32.2 s per 10k) and memory is flat
+    over 10k steps.
+  - Projected NumPy time to the May 2024 peak: 6.9 min (90m), 20.7 min (60m), ~4.0 h (30m, an estimate
+    from a projected step count).
+- **Fused GPU substep:**
+  - `step()` is 1.9× / 2.7× / 5.0× faster than NumPy at 90 / 60 / 30m and up to 14× faster than plain
+    CuPy, which stays launch-bound at ~16 ms (reproducing §18).
+  - The 90m replay to the peak gives the same outcome as NumPy (134,634 vs. 134,639 steps, 1,955
+    flooded cells, CSI 0.395) in 6.72 min, against NumPy's 7.22 min in the same session (1.07x).
+  - End-to-end the gain is capped by the still-unfused `compute_stable_dt`, so a fused dt reduction is
+    the next GPU lever. It has not been attempted.
+- Nothing in the model, the API or any validated number changed. The live API still runs NumPy.
+
 To run the CA-engine PoC directly (bare-metal, unrelated to Docker): `cd backend && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python -m examples.poc_grid` (must be run as a module, from the `backend/` directory, so `simulation` resolves as a package). Prints step-by-step conservation checks and saves `backend/poc_grid_result.png` (gitignored, regenerate anytime).
 
 To run the real end-to-end CSI validation against the May 2024 event (bare-metal, expect ~30 minutes):
@@ -1386,6 +1454,12 @@ To run the Torres-inspired fast mode against the same event (seconds, not minute
 `cd backend && .venv/bin/python -m examples.fast_mode_may2024` (same raw files plus the saved stage layers;
 fully offline. Both scripts take `--resolution 60` to score the 60m grid instead, §24. `--skip-gap-correction` scores naively only, `--conveyance single_cell` reproduces §19's
 first result, and `--min-reach-length-m` reproduces §23's sweep).
+
+To run the step-11 performance comparisons (run uncontended, nothing else running; ~15 min with all
+backends and `--iterations` up to 10k): `cd backend && .venv/bin/python -m examples.benchmark_scaling
+--backends numpy loops cupy cupy-fused --iterations 10 100 1000 10000 --results-json scaling.json --plot
+scaling.png`. The CuPy backends need CuPy installed ad hoc (not in `requirements.txt`) and are skipped
+without it.
 
 To run the full containerized stack: `docker compose up --build` from the repo root, then open `http://localhost:5173`. If
 host port 5173 is already taken (another stack or a bare `npm run dev`), pick another one:
@@ -1528,7 +1602,7 @@ First version (deliberately simpler than the TCC's full documented model): redis
     `docs/tcc-deviations.md` §16 for the full investigation). RMSE (depth vs. HWM/SWOT) is **closed as a
     data-availability limitation**: no structured HWM dataset exists for this ROI (only a CPRM PDF
     report), so validation is extent-only - see `docs/tcc-deviations.md` §20.
-11. **Performance benchmarking** *(current step)* — vectorized NumPy vs. loop-based comparison, exploratory CuPy/GPU, run against the real event replay from steps 9–10.
+11. **Performance benchmarking** *(done)* — vectorized NumPy vs. loop-based comparison (55–72× on the real grids), run time/memory vs. grid size and iterations, and exploratory CuPy/GPU including a fused bit-identical substep. See "Step 11 — the TCC's three performance comparisons, measured" above and `docs/tcc-deviations.md` §25.
 
 Update the "Current status" section above as steps complete — this file is meant to be read at the start of future sessions instead of re-deriving the plan from scratch.
 
@@ -1545,8 +1619,9 @@ they'd cost and whether they touch the TCC's documented model:
   *(done — `seed_volume` / `seed_location` on `POST /simulations`, placed through the grid's real UTM
   transform, see "Seed volume + click-to-place seeding" in Current status)*.
 - Visual polish: ~~better depth→color ramp/legend~~ *(done — fixed 6-band blue scale with a numeric
-  legend, see "Frontend visual polish" in Current status)*; still open: smoother frame-to-frame
-  transitions, terrain shading under the flood overlay.
+  legend, see "Frontend visual polish" in Current status)*; ~~smoother frame-to-frame transitions~~ *(done —
+  crossfade, see "Frontend backlog closed" in Current status)*; ~~terrain shading under the flood overlay~~
+  *(done — the Relief basemap's hillshade and the Terrain input layer)*.
 - ~~Timeline scrubber~~ *(done — bounded Float32Array frame buffer + slider/replay under the temporal pane,
   see "Timeline scrubber" in Current status)*.
 
@@ -1578,16 +1653,12 @@ None touch the documented engine; the ones needing data the frontend doesn't hav
   Current status)*: serve the SGB/CPRM reference extent (and the Estrela coverage-gap exclusion,
   `docs/tcc-deviations.md` §16.2) through the API, draw simulated vs. observed agreement on the map, and show
   gap-corrected CSI / hit rate / false-alarm rate live in the Results tab.
-- **Model inputs as map layers**: a hillshade rendered from the project's own processed DEM (the exact terrain
-  the CA sees, rather than Esri's), and a Manning roughness / land-cover layer. Needs small backend endpoints.
-- **Click-a-cell inspector**: depth, elevation `Z`, Manning `n` and first-wet time for the clicked cell, from
-  the frame buffer plus the grid's static rasters.
+- ~~**Model inputs as map layers**~~ and ~~**click-a-cell inspector**~~ *(done in `627ce77` / `a9e2ddf` —
+  `GET /grids/{resolution}/inputs`, the Terrain / Roughness layers and `CellInspector`; see
+  `docs/ARCHITECTURE.md`)*.
 - ~~**Arrival-time map**~~, ~~**maximum-depth envelope**~~, ~~**gauge hydrograph chart**~~, ~~**overlay
   opacity slider**~~ and ~~**export** (PNG, GeoJSON)~~ *(done — see "Flood-map products, export and the gauge
   hydrograph" in Current status)*.
-- **Smoother frame-to-frame transitions** (already listed above).
-- **Timeline playback speed** (1x/4x/16x) for replaying the buffered frames; a live run stays compute-bound.
-- **Narrow-screen Compare fix**: below ~900 px the map-view switcher covers the right pane's label, and the
-  bottom-right controls cover the fast pane's legend.
-- **Playwright smoke tests** (`npm run test:e2e`) for Setup, Replay, Stop, seeding and the basemap picker —
-  the frontend has no tests yet.
+- ~~**Smoother frame-to-frame transitions**~~, ~~**timeline playback speed** (1x/4x/16x)~~, ~~**narrow-screen
+  Compare fix**~~ and ~~**Playwright smoke tests** (`npm run test:e2e`)~~ *(done — see "Frontend backlog
+  closed" in Current status)*.

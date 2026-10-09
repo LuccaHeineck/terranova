@@ -4,8 +4,18 @@ import type { FrameBuffer } from '../rendering/frameBuffer'
 import type { CompactFrame } from '../rendering/depthGrid'
 import type { ResultLayer } from './useSimulationRun'
 
-/** Replay speed of the buffered frames: a full 30m buffer (238 frames) plays in ~30 s. */
+/** Replay speed of the buffered frames at 1x: a full 30m buffer (238 frames) plays in ~30 s. */
 export const PLAYBACK_FPS = 8
+
+/** The replay speeds offered, as multiples of PLAYBACK_FPS. */
+export const PLAYBACK_SPEEDS = [1, 4, 16] as const
+export type PlaybackSpeed = (typeof PLAYBACK_SPEEDS)[number]
+
+/**
+ * The most frames a second the replay draws. Past it a faster speed skips buffered frames instead of drawing
+ * each one: every frame is a full overlay repaint, and 128 of them a second would outrun the browser.
+ */
+const MAX_DRAWN_FPS = 32
 
 /**
  * Which buffered frame is shown. `step: null` follows the newest frame (live, or the latest once the run
@@ -29,6 +39,9 @@ export interface Timeline {
   playing: boolean
   /** The run is still streaming frames into the buffer. */
   live: boolean
+  speed: PlaybackSpeed
+  /** Steps to the next of PLAYBACK_SPEEDS, wrapping around; applies at once, even mid-replay. */
+  cycleSpeed: () => void
   select: (index: number) => void
   jumpToLatest: () => void
   togglePlay: () => void
@@ -38,6 +51,12 @@ export function useTimeline(layer: ResultLayer | null, live: boolean): Timeline 
   const buffer = layer?.history ?? null
   const bufferId = buffer?.id ?? null
   const [stored, setCursor] = useState<Cursor>({ bufferId: null, step: null, playing: false })
+  // The speed outlives runs: it is how this viewer likes to watch a replay, not part of one.
+  const [speed, setSpeed] = useState<PlaybackSpeed>(1)
+  const cycleSpeed = useCallback(
+    () => setSpeed((current) => PLAYBACK_SPEEDS[(PLAYBACK_SPEEDS.indexOf(current) + 1) % PLAYBACK_SPEEDS.length]),
+    [],
+  )
   const cursor = useMemo<Cursor>(
     () => (stored.bufferId === bufferId ? stored : { bufferId, step: null, playing: false }),
     [stored, bufferId],
@@ -79,19 +98,22 @@ export function useTimeline(layer: ResultLayer | null, live: boolean): Timeline 
 
   useEffect(() => {
     if (!cursor.playing) return
+    const framesPerSecond = PLAYBACK_FPS * speed
+    const drawnPerSecond = Math.min(framesPerSecond, MAX_DRAWN_FPS)
+    const advance = Math.round(framesPerSecond / drawnPerSecond)
     const timer = setInterval(() => {
       setCursor((prev) => {
         const current = bufferRef.current
         if (!current || prev.bufferId !== current.id || prev.step === null) return { ...prev, playing: false }
-        const next = indexAtOrBefore(current, prev.step) + 1
+        const next = indexAtOrBefore(current, prev.step) + advance
         const last = current.entries.length - 1
         if (next < last) return { ...prev, step: current.entries[next].frame.step }
         // Reached the newest frame: stop there, following it - which, if the run is still live, means live.
         return { ...prev, step: null, playing: false }
       })
-    }, 1000 / PLAYBACK_FPS)
+    }, 1000 / drawnPerSecond)
     return () => clearInterval(timer)
-  }, [cursor.playing])
+  }, [cursor.playing, speed])
 
   return {
     buffer,
@@ -101,6 +123,8 @@ export function useTimeline(layer: ResultLayer | null, live: boolean): Timeline 
     following,
     playing: cursor.playing,
     live,
+    speed,
+    cycleSpeed,
     select,
     jumpToLatest,
     togglePlay,

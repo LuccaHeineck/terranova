@@ -98,10 +98,15 @@ export function TopBar({
             {t.topBar.gridInfo(gridShape[0], gridShape[1], resolution)}
           </span>
         )}
+        {/* On a phone the pill is just its dot, so the bar fits beside Stop; the label stays for screen readers. */}
         {shownStatus && (
-          <span role="status" className="flex items-center gap-2 rounded-full bg-surface px-2.5 py-1 text-ink ring-1 ring-line">
+          <span
+            role="status"
+            title={shownStatus.label}
+            className="flex items-center gap-2 rounded-full bg-surface px-2.5 py-2.5 text-ink ring-1 ring-line sm:py-1"
+          >
             <span aria-hidden="true" className={`h-2 w-2 rounded-full ${shownStatus.dot}`} />
-            {shownStatus.label}
+            <span className="sr-only sm:not-sr-only">{shownStatus.label}</span>
           </span>
         )}
 

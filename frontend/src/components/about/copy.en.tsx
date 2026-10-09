@@ -173,8 +173,8 @@ export const aboutEn: AboutCopy = {
               the temporal map shows.
             </li>
             <li>
-              The <Strong>timeline</Strong> under the temporal map scrubs and replays the frames received so far;{' '}
-              <Ui>Jump to latest</Ui> follows the run again.
+              The <Strong>timeline</Strong> under the temporal map scrubs and replays the frames received so far, at{' '}
+              <Ui>1×</Ui>, <Ui>4×</Ui> or <Ui>16×</Ui>; <Ui>Jump to latest</Ui> follows the run again.
             </li>
             <li>
               <Ui>Layers</Ui> (top right) changes the basemap and the overlay opacity. <Ui>Observed flood</Ui> colors

@@ -307,6 +307,7 @@ export const en = {
       }`,
     play: 'Play buffered frames',
     pause: 'Pause replay',
+    speed: (speed: number, next: number) => `Replay speed ${speed}×; switch to ${next}×`,
     frameAria: 'Temporal frame',
     frameAriaCompare: 'Temporal frame (temporal CA pane)',
     frame: 'Frame',

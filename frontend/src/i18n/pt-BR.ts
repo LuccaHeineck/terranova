@@ -319,6 +319,7 @@ export const ptBR: Messages = {
       }`,
     play: 'Reproduzir os quadros armazenados',
     pause: 'Pausar a reprodução',
+    speed: (speed, next) => `Velocidade da reprodução ${speed}×; mudar para ${next}×`,
     frameAria: 'Quadro temporal',
     frameAriaCompare: 'Quadro temporal (mapa do AC temporal)',
     frame: 'Quadro',

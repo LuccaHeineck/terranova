@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import type { CSSProperties } from 'react'
+import { PLAYBACK_SPEEDS } from '../hooks/useTimeline'
 import type { Timeline as TimelineState } from '../hooks/useTimeline'
 import { bufferBytes } from '../rendering/frameBuffer'
 import { countFlooded } from '../rendering/depthToImage'
@@ -15,7 +16,7 @@ interface TimelineProps {
 /** Slider, playback and readout for the buffered frames of the temporal run. */
 export function Timeline({ timeline, compare }: TimelineProps) {
   const { t } = useI18n()
-  const { buffer, frame, index, count, following, playing, live } = timeline
+  const { buffer, frame, index, count, following, playing, live, speed } = timeline
   const flooded = useMemo(() => (frame ? countFlooded(frame.depth) : 0), [frame])
   if (!buffer || !frame) return null
 
@@ -32,6 +33,7 @@ export function Timeline({ timeline, compare }: TimelineProps) {
   else [state, stateClass] = [t.timeline.paused, 'bg-warn/12 text-warn']
   const fill = count > 1 ? (index / (count - 1)) * 100 : 100
   const bufferNote = t.timeline.buffer(count, megabytes, buffer.stride)
+  const nextSpeed = PLAYBACK_SPEEDS[(PLAYBACK_SPEEDS.indexOf(speed) + 1) % PLAYBACK_SPEEDS.length]
 
   return (
     <div className="flex flex-col gap-2 border-t border-line bg-surface px-3 pt-2.5 pb-2.5 text-xs text-ink-muted sm:px-4">
@@ -44,6 +46,17 @@ export function Timeline({ timeline, compare }: TimelineProps) {
           className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent text-canvas shadow-sm transition-colors hover:bg-accent-strong disabled:cursor-not-allowed disabled:bg-sunken disabled:text-ink-muted disabled:shadow-none"
         >
           {playing ? <IconPause className="h-4 w-4" /> : <IconPlay className="h-4 w-4" />}
+        </button>
+        <button
+          type="button"
+          onClick={timeline.cycleSpeed}
+          disabled={count < 2}
+          aria-label={t.timeline.speed(speed, nextSpeed)}
+          title={t.timeline.speed(speed, nextSpeed)}
+          data-testid="timeline-speed"
+          className="h-7 w-10 shrink-0 rounded-lg bg-sunken font-medium text-ink tabular-nums transition-colors hover:bg-line disabled:cursor-not-allowed disabled:text-ink-muted"
+        >
+          {speed}×
         </button>
         <input
           type="range"

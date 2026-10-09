@@ -53,6 +53,31 @@ const RELIEF_PANE_Z_INDEX = '250'
 const INPUTS_PANE = 'inputs'
 const INPUTS_PANE_Z_INDEX = '300'
 
+// The flood overlay's own pane, where overlayPane sits (400). The overlay opacity is the pane's, not each image's:
+// during a crossfade the two frames add up inside it (plus-lighter, see .flood-frame) and the sum is then dimmed
+// once, so a cell wet in both frames keeps its strength instead of dipping halfway through.
+const FLOOD_PANE = 'flood'
+const FLOOD_PANE_Z_INDEX = '400'
+
+// One frame fades into the next over this long, or less when frames come faster (0.8 of the gap since the last
+// one), so a fade always finishes before the next starts. Shorter than MIN_FADE_MS, it just swaps.
+const FADE_MS = 220
+const MIN_FADE_MS = 60
+
+// Each image pixel is one grid cell, and the browser's default smoothing would blend neighboring depth bands into
+// colors that belong to neither.
+const FLOOD_FRAME_CLASS = '[image-rendering:pixelated] flood-frame'
+
+/** The next flood image, fading in over the current one once it has loaded. */
+interface IncomingFrame {
+  overlay: L.ImageOverlay
+  durationMs: number
+  /** Loaded and fading: a newer frame finishes this fade first instead of replacing the image. */
+  fading: boolean
+  /** The pending animation frame of the fade. */
+  raf: number | null
+}
+
 // Place names above the flood overlay, so they stay readable through it, and below the seed pane.
 const LABELS_PANE = 'labels'
 const LABELS_PANE_Z_INDEX = '420'
@@ -94,9 +119,10 @@ export function MapPane({
 }: MapPaneProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<L.Map | null>(null)
+  // The flood frame on screen, and the one fading in over it.
   const overlayRef = useRef<L.ImageOverlay | null>(null)
-  // The opacity a new overlay is created with; the effect below keeps the current one in step.
-  const opacityRef = useRef(opacity)
+  const incomingRef = useRef<IncomingFrame | null>(null)
+  const lastFrameAtRef = useRef(0)
   const inputOverlayRef = useRef<L.ImageOverlay | null>(null)
   const highlightRef = useRef<L.LayerGroup | null>(null)
   const outlineRef = useRef<L.LayerGroup | null>(null)
@@ -108,6 +134,8 @@ export function MapPane({
   }, [onMapClick])
   // Bounds the view was last fitted to; seeding it with the mount-time bounds skips that first fit.
   const fittedBoundsRef = useRef<Bounds | null>(fitOnMount ? null : bounds)
+  // The view is still the automatic fit to those bounds, untouched by the user: refit it when the pane resizes.
+  const autoFitRef = useRef(false)
   const onMapReadyRef = useRef(onMapReady)
   useEffect(() => {
     onMapReadyRef.current = onMapReady
@@ -130,22 +158,39 @@ export function MapPane({
     const inputsPane = map.createPane(INPUTS_PANE)
     inputsPane.style.zIndex = INPUTS_PANE_Z_INDEX
     inputsPane.style.pointerEvents = 'none'
+    const floodPane = map.createPane(FLOOD_PANE)
+    floodPane.style.zIndex = FLOOD_PANE_Z_INDEX
+    floodPane.style.isolation = 'isolate'
+    floodPane.style.pointerEvents = 'none'
     map.createPane(SEED_PANE).style.zIndex = SEED_PANE_Z_INDEX
     map.on('click', (event: L.LeafletMouseEvent) => {
       onMapClickRef.current?.({ lat: event.latlng.lat, lon: event.latlng.lng })
     })
     mapRef.current = map
-    // The pane is resized by layout changes Leaflet can't see (the Compare view splitting the map area),
-    // which would otherwise leave unrendered gray strips.
-    const observer = new ResizeObserver(() => map.invalidateSize())
+    // The pane is resized by layout changes Leaflet can't see (the Compare view splitting the map area, the
+    // timeline appearing under it), which would otherwise leave unrendered gray strips. A view still as it was
+    // fitted is fitted again, or the grid would spill past a pane that shrank after the fit.
+    const observer = new ResizeObserver(() => {
+      map.invalidateSize()
+      const fitted = fittedBoundsRef.current
+      if (autoFitRef.current && fitted) map.fitBounds(toLatLngBounds(fitted), { animate: false })
+    })
     observer.observe(container)
+    // Any pan, zoom or click of the user's own ends that: the view is theirs from then on.
+    const userTookOver = () => {
+      autoFitRef.current = false
+    }
+    for (const type of ['pointerdown', 'wheel', 'keydown'] as const) container.addEventListener(type, userTookOver)
     onMapReadyRef.current?.(map)
 
     return () => {
       observer.disconnect()
+      for (const type of ['pointerdown', 'wheel', 'keydown'] as const) container.removeEventListener(type, userTookOver)
       onMapReadyRef.current?.(null)
       map.remove()
       mapRef.current = null
+      if (incomingRef.current?.raf) cancelAnimationFrame(incomingRef.current.raf)
+      incomingRef.current = null
       overlayRef.current = null
       inputOverlayRef.current = null
       highlightRef.current = null
@@ -254,32 +299,98 @@ export function MapPane({
     if (!map || !bounds || bounds === fittedBoundsRef.current) return
     fittedBoundsRef.current = bounds
     map.fitBounds(toLatLngBounds(bounds))
+    autoFitRef.current = true
   }, [bounds])
 
   useEffect(() => {
-    opacityRef.current = opacity
-    overlayRef.current?.setOpacity(opacity)
+    const pane = mapRef.current?.getPane(FLOOD_PANE)
+    if (pane) pane.style.opacity = String(opacity)
   }, [opacity])
 
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
+
+    // Ends a fade at once: the incoming frame becomes the one on screen.
+    const settle = () => {
+      const incoming = incomingRef.current
+      if (!incoming) return
+      if (incoming.raf) cancelAnimationFrame(incoming.raf)
+      incomingRef.current = null
+      overlayRef.current?.remove()
+      overlayRef.current = incoming.overlay
+      incoming.overlay.setOpacity(1)
+    }
+
     if (!imageUrl || !bounds) {
+      settle()
       overlayRef.current?.remove()
       overlayRef.current = null
       return
     }
-    if (!overlayRef.current) {
-      // Pixelated: each image pixel is one grid cell, and the browser's default smoothing would
-      // blend neighboring depth bands into colors that belong to neither.
-      overlayRef.current = L.imageOverlay(imageUrl, toLatLngBounds(bounds), {
-        opacity: opacityRef.current,
-        className: '[image-rendering:pixelated]',
+    const latLngBounds = toLatLngBounds(bounds)
+    const now = performance.now()
+    const sinceLast = now - lastFrameAtRef.current
+    lastFrameAtRef.current = now
+    const current = overlayRef.current
+    if (!current) {
+      overlayRef.current = L.imageOverlay(imageUrl, latLngBounds, {
+        pane: FLOOD_PANE,
+        className: FLOOD_FRAME_CLASS,
       }).addTo(map)
-    } else {
-      overlayRef.current.setBounds(toLatLngBounds(bounds))
-      overlayRef.current.setUrl(imageUrl)
+      return
     }
+
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const durationMs = reducedMotion ? 0 : Math.min(FADE_MS, 0.8 * sinceLast)
+    // The incoming image has not loaded yet: load this newer frame in its place.
+    const pending = incomingRef.current
+    if (pending && !pending.fading) {
+      pending.overlay.setBounds(latLngBounds)
+      pending.overlay.setUrl(imageUrl)
+      pending.durationMs = durationMs
+      return
+    }
+    settle()
+    const shown = overlayRef.current!
+    shown.setBounds(latLngBounds)
+    if (durationMs < MIN_FADE_MS) {
+      shown.setUrl(imageUrl)
+      return
+    }
+
+    const overlay = L.imageOverlay(imageUrl, latLngBounds, {
+      pane: FLOOD_PANE,
+      opacity: 0,
+      className: FLOOD_FRAME_CLASS,
+    }).addTo(map)
+    const incoming: IncomingFrame = { overlay, durationMs, fading: false, raf: null }
+    incomingRef.current = incoming
+    overlay.on('load', () => {
+      if (incomingRef.current !== incoming || incoming.fading) return
+      incoming.fading = true
+      const outgoing = overlayRef.current
+      // Both opacities from one clock, each animation frame: CSS transitions on the two images can start frames
+      // apart (a freshly loaded image's often starts late), and the sum would dip.
+      const start = performance.now()
+      const tick = (time: number) => {
+        const progress = Math.min(1, Math.max(0, (time - start) / incoming.durationMs))
+        if (progress >= 1) {
+          settle()
+          return
+        }
+        overlay.setOpacity(progress)
+        outgoing?.setOpacity(1 - progress)
+        incoming.raf = requestAnimationFrame(tick)
+      }
+      incoming.raf = requestAnimationFrame(tick)
+    })
+    // A frame that fails to decode is skipped: the one on screen stays.
+    overlay.on('error', () => {
+      if (incomingRef.current !== incoming) return
+      incomingRef.current = null
+      overlay.remove()
+    })
   }, [imageUrl, bounds])
 
   return (

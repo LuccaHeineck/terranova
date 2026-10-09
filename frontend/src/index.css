@@ -80,6 +80,12 @@ body {
   animation: fade-up 200ms ease-out;
 }
 
+/* Flood frames add up in their pane while one fades into the next: halfway, a cell wet in both is the mix of its
+   two colors at full strength, and a cell wet in one is that color at half. Plain stacking would dim the first. */
+.flood-frame {
+  mix-blend-mode: plus-lighter;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

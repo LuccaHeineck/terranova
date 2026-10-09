@@ -5,10 +5,13 @@ Same scenario as `examples/validate_may2024.py` (90m) and
 `examples/benchmark_30m_gauge_driven.py` (30m) - real terrain, real roughness,
 real hydrograph, real outlet, stopping at the real observed May 2024 peak - but
 parameterized so the same loop can be timed under different `outflow_fraction`
-values and array backends (NumPy on CPU, CuPy on GPU) without editing code:
+values and array backends (NumPy on CPU, CuPy on GPU, or CuPy with each substep fused
+into two kernels - simulation/engine_cupy_fused.py, docs/tcc-deviations.md section 25)
+without editing code:
 
     python -m examples.benchmark_backends --resolution 90 --outflow-fraction 0.5
     python -m examples.benchmark_backends --resolution 30 --max-steps 5000 --backend cupy
+    python -m examples.benchmark_backends --resolution 90 --backend cupy-fused
 
 Reports macro step count, the per-macro-step substep-count histogram
 (`ceil(f_eff / _MAX_STABLE_SUBSTEP_FRACTION)`, computed here rather than by
@@ -77,10 +80,15 @@ def run(args: argparse.Namespace) -> None:
         name = "_MAX_STABLE_SUBSTEP_FRACTION_VON_NEUMANN" if args.neighborhood == "von_neumann" else "_MAX_STABLE_SUBSTEP_FRACTION"
         setattr(engine, name, args.substep_fraction)
     print(f"neighborhood={args.neighborhood} max substep fraction={engine._max_stable_substep_fraction(args.neighborhood)}")
-    if args.backend == "cupy":
+    step_fn = step
+    if args.backend.startswith("cupy"):
         import cupy as xp
 
         to_device, to_host, sync = xp.asarray, xp.asnumpy, xp.cuda.Device().synchronize
+        if args.backend == "cupy-fused":
+            from simulation import engine_cupy_fused
+
+            step_fn = engine_cupy_fused.step
     else:
         xp = np
         to_device = to_host = lambda a: a  # noqa: E731
@@ -137,7 +145,7 @@ def run(args: argparse.Namespace) -> None:
         substeps[math.ceil(f_eff / engine._max_stable_substep_fraction(args.neighborhood))] += 1
 
         discharge = hydrograph.discharge_at(elapsed_time)
-        if args.backend == "cupy":
+        if args.backend.startswith("cupy"):
             injected = discharge * dt / cell_area_m2
             inflow = inflow_mask_f * (injected / inflow_cell_count)
         else:
@@ -147,7 +155,7 @@ def run(args: argparse.Namespace) -> None:
         if check:
             volume_before = float(H.sum())
             injected_sum = float(inflow.sum())
-        H = step(
+        H = step_fn(
             Z,
             H,
             N,
@@ -217,7 +225,7 @@ def run(args: argparse.Namespace) -> None:
     total_substeps = sum(k * v for k, v in substeps.items())
     print(f"substeps: total={total_substeps} mean/step={total_substeps / t:.2f} "
           f"histogram(top)={sorted(substeps.items(), key=lambda kv: -kv[1])[:8]}")
-    if args.backend == "cupy":
+    if args.backend.startswith("cupy"):
         print(f"GPU memory pool used: {xp.get_default_memory_pool().used_bytes() / 1e6:.1f} MB, "
               f"total held: {xp.get_default_memory_pool().total_bytes() / 1e6:.1f} MB")
 
@@ -240,7 +248,7 @@ def main() -> None:
     parser.add_argument("--resolution", type=int, choices=[30, 90], default=90)
     parser.add_argument("--outflow-fraction", type=float, default=engine.DEFAULT_OUTFLOW_FRACTION)
     parser.add_argument("--max-steps", type=int, default=None)
-    parser.add_argument("--backend", choices=["numpy", "cupy"], default="numpy")
+    parser.add_argument("--backend", choices=["numpy", "cupy", "cupy-fused"], default="numpy")
     parser.add_argument("--neighborhood", choices=list(engine.NEIGHBORHOODS), default="moore")
     parser.add_argument(
         "--substep-fraction", type=float, default=None,
