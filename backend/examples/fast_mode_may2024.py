@@ -28,11 +28,12 @@ the same offline masks the API serves (rebuilt from the stage layers
 the default `cross_section` rule is section 23's. `--min-reach-length-m`
 reproduces section 23's reach-length sweep. `--resolution 60` scores the 60m grid
 the same way (gauge cell `settings.INTERMEDIATE_GAUGE_ROW/COL`); the temporal
-column then still quotes the 90m numbers, for reference only.
+column then still quotes the 90m numbers, for reference only. `--resolution 30`
+does the same on the live API's 30m grid (section 26).
 
 Run from the backend/ directory with the venv active:
 
-    python -m examples.fast_mode_may2024 [--resolution 90|60] [--skip-gap-correction]
+    python -m examples.fast_mode_may2024 [--resolution 90|60|30] [--skip-gap-correction]
         [--conveyance cross_section|single_cell] [--min-reach-length-m M] [--save-masks PATH.npz]
         [--depth-png PATH.png]
 """

@@ -191,6 +191,13 @@ INTERMEDIATE_GAUGE_ROW = 30
 INTERMEDIATE_GAUGE_COL = 39
 FLOOD_EXTENT_60M_PROCESSED_PATH = PROCESSED_DIR / "lajeado_flood_extent_60m.tif"
 
+# The same gauge geolocated the same way on the live API's 30m grid (shape 183x192) ->
+# row 61, col 79 (Z=22.0m, 4 cells west of the row's channel minimum at col 83 - Lajeado's
+# bank again, like the 90m and 60m cells). Scored against May 2024 by
+# examples/tcc2_scenarios.py's temporal_30m_moore (docs/tcc-deviations.md section 26).
+FULL_RESOLUTION_GAUGE_ROW = 61
+FULL_RESOLUTION_GAUGE_COL = 79
+
 # Everything examples/validate_may2024.py and examples/fast_mode_may2024.py need to
 # score one grid against the May 2024 reference, keyed by `--resolution`.
 SCORED_GRIDS = {
@@ -205,6 +212,12 @@ SCORED_GRIDS = {
         "landcover_path": LANDCOVER_60M_PROCESSED_PATH,
         "flood_extent_path": FLOOD_EXTENT_60M_PROCESSED_PATH,
         "gauge_cell": (INTERMEDIATE_GAUGE_ROW, INTERMEDIATE_GAUGE_COL),
+    },
+    30: {
+        "dem_path": DEM_PROCESSED_PATH,
+        "landcover_path": LANDCOVER_PROCESSED_PATH,
+        "flood_extent_path": FLOOD_EXTENT_PROCESSED_PATH,
+        "gauge_cell": (FULL_RESOLUTION_GAUGE_ROW, FULL_RESOLUTION_GAUGE_COL),
     },
 }
 

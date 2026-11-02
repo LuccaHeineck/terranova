@@ -41,6 +41,9 @@ earlier ad-hoc 90m run through the same peak):
 
 `--resolution 60` runs the same scenario on the 60m grid instead (gauge cell
 `settings.INTERMEDIATE_GAUGE_ROW/COL`); expect roughly 4x the 90m wall-clock.
+`--resolution 30` scores the live API's 30m grid (gauge cell
+`settings.FULL_RESOLUTION_GAUGE_ROW/COL`); expect ~3.3 h uncontended
+(docs/tcc-deviations.md section 26).
 Besides the naive scores, the run is also scored with the Estrela-gap-only
 correction (docs/tcc-deviations.md section 16.2), rebuilt offline by
 `ingestion.flood_extent.build_validation_reference`.
