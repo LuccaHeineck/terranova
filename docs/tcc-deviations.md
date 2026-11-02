@@ -895,7 +895,7 @@ made anywhere**: the comparison is against this project's own temporal engine on
 |---|---|---|
 | naive TP / FP / FN | 731 / 2,109 / 100 | 789 / 1,167 / 42 |
 | naive CSI | 0.249 | 0.395 |
-| **Estrela-gap-only CSI** (§16.2 correction) | **0.531** | **0.900** |
+| **Estrela-gap-only CSI** (§16.2 correction) | **0.530** | **0.900** |
 | gap-only Hit Rate / FAR | 0.880 / 0.428 | 0.949 / 0.056 |
 | gap-only FP | 547 | 46 |
 | **wall-clock to a final extent** | **~74 ms** (median of 20) | **7.6 min** (§18) |
@@ -1325,7 +1325,7 @@ reaches at least `MIN_REACH_LENGTH_M` long (90m grid, gap-only TP/FP/FN):
 | naive TP / FP / FN | 731 / 2,109 / 100 | **800 / 1,223 / 31** | 789 / 1,167 / 42 |
 | naive CSI | 0.249 | **0.390** | 0.395 |
 | gap-only TP / FP / FN | 731 / 547 / 100 | **800 / 62 / 31** | 789 / 46 / 42 |
-| **Estrela-gap-only CSI** | 0.531 | **0.896** | **0.900** |
+| **Estrela-gap-only CSI** | 0.530 | **0.896** | **0.900** |
 | gap-only Hit Rate / FAR | 0.880 / 0.428 | **0.963 / 0.072** | 0.949 / 0.056 |
 | flooded-cell depth, median / p95 | 33.5 / 54.7 m | **10.0 / 24.0 m** | 9.3 / 22.7 m (`project-plan.md`, visual-polish entry) |
 | wall-clock to a final extent | ~74 ms | **~73 ms** | 7.6 min |
