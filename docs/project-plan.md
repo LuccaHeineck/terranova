@@ -1366,9 +1366,33 @@ write-up: `docs/tcc-deviations.md` §24.
   valley-edge fringe again. The fast mode's 60m rating curve sits ~1 m lower (34.2–36.2 m against
   35.0–38.0 m), which on the whole-meter DEM is one ring of cells.
 - **App:** copy only. The grid caption reads "Scored" / "Avaliada", and the About limits quote the 60m
-  scores. 30m is still unscored.
+  scores. 30m was still unscored at that point (since scored, see the next entry).
 - **Tests:** suite 180/180. No new tests: the change is script flags and a settings table, and the 90m
   defaults are unchanged.
+
+**30m grid scored against May 2024 — gap-only CSI 0.860 temporal, 0.886 fast, nothing re-tuned.** Full
+write-up: `docs/tcc-deviations.md` §26.
+- **How:** `settings.SCORED_GRIDS` gains a `30` entry (the live API's own `lajeado_estrela_z.tif`/`_n.tif`),
+  so both scoring scripts take `--resolution 30`. The gauge lands on (61, 79), on Lajeado's bank
+  (`settings.FULL_RESOLUTION_GAUGE_ROW/COL`). The temporal run is `examples/tcc2_scenarios.py`'s new
+  `temporal_30m_moore` scenario, cached to `data/processed/tcc2/` like the others.
+- **Results** (defaults, `outflow_fraction=0.085` from the 90m calibration):
+  - temporal 30m: gap-only 6,681 / 246 / 838, **CSI 0.860** (60m 0.875, 90m 0.899), hit rate 0.889, FAR
+    0.036, naive 0.385. 556,774 steps (2.39× 60m, below §25's 659k projection), with exact mass balance
+    asserted at every step (largest relative drift 6e-13).
+  - fast 30m: gap-only 6,983 / 360 / 536, **CSI 0.886**, 658 ms, continuity exact. Temporal and fast agree
+    at CSI 0.931.
+  - The shift noise floor is +0.0000 gap-only at ±270 m. The depth field is the smoothest of the three
+    grids (roughness 0.69, against 1.24 at 60m and 1.68 at 90m).
+- **The loss is recall again:** FN 181 → 838 while FAR stays at 0.036. The misses are the valley-edge fringe.
+- **Wall-clock:** 281 min in total, but the first ~35 min (~20,000 steps) were Windows 11 power-throttling
+  the windowless background process (~100 ms per step). Disabling throttling for the process
+  (`SetProcessInformation`, `ProcessPowerThrottling`) restored a steady 27.5 ms per macro step, so the
+  whole run takes ≈ 4.25 h unthrottled (the figure fig17 uses, like 90m's measured 7.6 min). On §25's
+  benchmark median of 21.6 ms per step it projects to ≈ 3.3 h. The same throttling most likely explains the
+  long cached wall-clocks of the earlier `tcc2_scenarios.py` runs. Run long benchmarks in the foreground or
+  with throttling disabled.
+- **App:** copy only. The About limits note quotes the 30m scores. The live overlay and scoring stay 90m.
 
 **Frontend backlog closed: playback speed, frame crossfade, phone-width Compare, Playwright smoke tests.**
 Frontend only; no API, engine or model change.
